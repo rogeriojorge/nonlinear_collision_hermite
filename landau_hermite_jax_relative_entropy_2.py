@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
@@ -106,6 +107,62 @@ def _circularity_defect(plane: np.ndarray, y: np.ndarray, z: np.ndarray, *, rel_
     numer = np.sum((fvals - radial_mean[bin_ids]) ** 2)
     denom = np.sum(radial_mean[bin_ids] ** 2) + 1e-300
     return float(np.sqrt(numer / denom))
+
+
+@dataclass(frozen=True)
+class PolarSliceGrid:
+    nmax: int
+    r: np.ndarray
+    theta: np.ndarray
+    psi0: np.ndarray
+    psi_y: np.ndarray   # (p,nr,nth)
+    psi_z: np.ndarray   # (p,nr,nth)
+
+
+def prepare_polar_slice_grid(*, nmax: int, rmax: float, nr: int, nth: int) -> PolarSliceGrid:
+    p = int(nmax) + 1
+    r = np.linspace(0.0, float(rmax), int(nr), dtype=np.float64)
+    theta = np.linspace(0.0, 2.0 * np.pi, int(nth), endpoint=False, dtype=np.float64)
+    Y = r[:, None] * np.cos(theta)[None, :]
+    Z = r[:, None] * np.sin(theta)[None, :]
+    psi0 = _psi0(p)
+    psi_y = np.zeros((p, r.size, theta.size), dtype=np.float64)
+    psi_z = np.zeros((p, r.size, theta.size), dtype=np.float64)
+    yflat = Y.reshape(-1)
+    zflat = Z.reshape(-1)
+    for m in range(p):
+        psi_y[m, :, :] = psi_1d(m, yflat).reshape(r.size, theta.size)
+        psi_z[m, :, :] = psi_1d(m, zflat).reshape(r.size, theta.size)
+    return PolarSliceGrid(nmax=int(nmax), r=r, theta=theta, psi0=psi0, psi_y=psi_y, psi_z=psi_z)
+
+
+def _reconstruct_plane_vy_vz_polar(f: np.ndarray, polar_grid: PolarSliceGrid) -> np.ndarray:
+    return np.einsum("nmp,n,mrt,prt->rt", f, polar_grid.psi0, polar_grid.psi_y, polar_grid.psi_z, optimize=True)
+
+
+def angular_symmetry_error_from_polar_plane(plane_rt: np.ndarray, *, rel_floor: float = 0.05) -> float:
+    plane_rt = np.asarray(plane_rt, dtype=np.float64)
+    field = np.maximum(plane_rt, 0.0)
+    radial_mean = np.mean(field, axis=1)
+    peak = float(np.max(radial_mean))
+    if (not np.isfinite(peak)) or peak <= 0.0:
+        return float("nan")
+    mask_r = radial_mean >= float(rel_floor) * peak
+    if not np.any(mask_r):
+        return 0.0
+    diff = field[mask_r, :] - radial_mean[mask_r, None]
+    numer = np.sum(diff * diff)
+    denom = np.sum(radial_mean[mask_r, None] ** 2) + 1e-300
+    return float(np.sqrt(numer / denom))
+
+
+def angular_symmetry_error_tensor(
+    f: np.ndarray,
+    *,
+    polar_grid: PolarSliceGrid,
+    rel_floor: float = 0.05,
+) -> float:
+    return angular_symmetry_error_from_polar_plane(_reconstruct_plane_vy_vz_polar(f, polar_grid), rel_floor=rel_floor)
 
 
 def _plot_yz_slice_panel(

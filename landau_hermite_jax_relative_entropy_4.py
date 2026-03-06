@@ -5,27 +5,24 @@ landau_hermite_jax_relative_entropy_2.py, and
 landau_hermite_jax_relative_entropy_3.py.
 
 This script sweeps numerical parameters and measures the same transverse
-radial-symmetry error used in landau_hermite_jax_relative_entropy_3.py.
+angular-symmetry error used in landau_hermite_jax_relative_entropy_3.py.
 
 For each time t, the v_x = 0 slice is reconstructed,
 
     g_t(v_y, v_z) = f(v_x = 0, v_y, v_z, t),
 
-then normalized by its positive peak,
+evaluated directly on a polar grid (r, theta). Using the angular mean
 
-    ghat_t(v_y, v_z) = max(g_t(v_y, v_z), 0) / max_{v_y,v_z} g_t.
+    <g_t>(r) = (1 / 2 pi) integral g_t(r, theta) d theta,
 
-Using the mask ghat_t >= eta with eta = 0.05, and the polar radius
+and restricting to radii where <g_t>(r) >= eta max_r <g_t>(r), the script
+reports
 
-    r = sqrt(v_y^2 + v_z^2),
+                     sum_mask [g_t(r,theta) - <g_t>(r)]^2
+    E_ang(t) = sqrt( ------------------------------------ ).
+                           sum_mask [<g_t>(r)]^2
 
-the script computes the annular average <ghat_t>(r) and reports
-
-                     sum_mask [ghat_t - <ghat_t>(r)]^2
-    E_rad(t) = sqrt( -------------------------------- ).
-                        sum_mask [<ghat_t>(r)]^2
-
-E_rad(t) = 0 indicates perfect axial symmetry in the transverse plane.
+E_ang(t) = 0 indicates perfect axial symmetry in the transverse plane.
 """
 from __future__ import annotations
 
@@ -45,13 +42,11 @@ os.environ.setdefault("XDG_CACHE_HOME", str(HERE / ".cache"))
 import matplotlib.pyplot as plt
 from matplotlib.ticker import LogFormatterMathtext, LogLocator
 
-from landau_hermite_jax_relative_entropy import prepare_entropy_grid
 from landau_hermite_jax_relative_entropy_2 import (
-    _circularity_defect,
-    _psi0,
-    _reconstruct_plane_vy_vz,
+    angular_symmetry_error_tensor,
     compute_twostream_histories,
     configure_plot_style,
+    prepare_polar_slice_grid,
 )
 
 
@@ -84,13 +79,11 @@ def _parse_kernel_pairs(s: str) -> List[Tuple[int, int]]:
     return out
 
 
-def _symmetry_error_history(hist: np.ndarray, *, nmax: int, xlim: float, nx: int) -> np.ndarray:
-    grid = prepare_entropy_grid(nmax=nmax, xlim=float(xlim), nx=int(nx))
-    psi0 = _psi0(nmax + 1)
+def _symmetry_error_history(hist: np.ndarray, *, nmax: int, rmax: float, nr: int, nth: int) -> np.ndarray:
+    polar_grid = prepare_polar_slice_grid(nmax=nmax, rmax=float(rmax), nr=int(nr), nth=int(nth))
     vals = np.empty(hist.shape[0], dtype=np.float64)
     for i, f in enumerate(hist):
-        plane = _reconstruct_plane_vy_vz(f, grid.psi, psi0)
-        vals[i] = _circularity_defect(plane, grid.x, grid.x)
+        vals[i] = angular_symmetry_error_tensor(f, polar_grid=polar_grid, rel_floor=0.05)
     return vals
 
 
@@ -99,7 +92,7 @@ def _decade_ylim(curves: Iterable[np.ndarray]) -> Tuple[float, float]:
     vals = vals[np.isfinite(vals) & (vals > 0.0)]
     if vals.size == 0:
         return 1e-6, 1e0
-    ymin = 10.0 ** np.floor(np.log10(np.min(vals)))
+    ymin = max(1e-3, 10.0 ** np.floor(np.log10(np.min(vals))))
     ymax = 10.0 ** np.ceil(np.log10(np.max(vals)))
     if ymax <= ymin:
         ymax = ymin * 10.0
@@ -115,14 +108,15 @@ def _cost_proxy(case: Case, tmax: float) -> float:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Axial-symmetry parameter sweep")
     ap.add_argument("--backend", choices=["jax", "numpy"], default="jax")
-    ap.add_argument("--nmax_list", type=str, default="4,6,8,10,12")
+    ap.add_argument("--nmax_list", type=str, default="6,9,12,13,14,15")
     ap.add_argument("--dt_list", type=str, default="0.15,0.10,0.075")
     ap.add_argument("--kernel_pairs", type=str, default="12:256,16:512,20:768")
     ap.add_argument("--tmax", type=float, default=15.0)
     ap.add_argument("--steps", type=int, default=None)
     ap.add_argument("--u", type=float, default=1.5)
     ap.add_argument("--grid_xlim", type=float, default=3.0)
-    ap.add_argument("--grid_nx", type=int, default=55)
+    ap.add_argument("--polar_nr", type=int, default=64)
+    ap.add_argument("--polar_nth", type=int, default=128)
     ap.add_argument("--linearized", choices=["on", "off"], default="on")
     ap.add_argument("--target_error", type=float, default=3e-2)
     ap.add_argument("--outprefix", type=str, default="Fig1_panel_3D_parameter_sweep")
@@ -182,10 +176,28 @@ def main() -> None:
             u=float(args.u),
             linearized=str(args.linearized),
         )
-        err_nl = np.maximum(_symmetry_error_history(f_hist, nmax=case.nmax, xlim=float(args.grid_xlim), nx=int(args.grid_nx)), 1e-18)
+        err_nl = np.maximum(
+            _symmetry_error_history(
+                f_hist,
+                nmax=case.nmax,
+                rmax=float(args.grid_xlim),
+                nr=int(args.polar_nr),
+                nth=int(args.polar_nth),
+            ),
+            1e-18,
+        )
         err_lin = None
         if f_hist_lin is not None:
-            err_lin = np.maximum(_symmetry_error_history(f_hist_lin, nmax=case.nmax, xlim=float(args.grid_xlim), nx=int(args.grid_nx)), 1e-18)
+            err_lin = np.maximum(
+                _symmetry_error_history(
+                    f_hist_lin,
+                    nmax=case.nmax,
+                    rmax=float(args.grid_xlim),
+                    nr=int(args.polar_nr),
+                    nth=int(args.polar_nth),
+                ),
+                1e-18,
+            )
             curves_all.append(err_lin)
         curves_all.append(err_nl)
         color = cmap[case.family][color_index[case.family]]
@@ -231,7 +243,7 @@ def main() -> None:
         ax_nl.axhline(float(args.target_error), color="0.5", lw=1.0, ls=":", zorder=0)
         ax_nl.legend(frameon=True, fancybox=False, edgecolor="0.8", facecolor="white", framealpha=0.92, fontsize=8, loc="upper left")
         if col == 0:
-            ax_nl.set_ylabel("radial-symmetry error")
+            ax_nl.set_ylabel("angular-symmetry error")
 
         if rows == 2:
             ax_lin = axes[1, col]
@@ -247,7 +259,7 @@ def main() -> None:
             ax_lin.axhline(float(args.target_error), color="0.5", lw=1.0, ls=":", zorder=0)
             ax_lin.set_xlabel(r"$t$")
             if col == 0:
-                ax_lin.set_ylabel("radial-symmetry error")
+                ax_lin.set_ylabel("angular-symmetry error")
 
     if rows == 2:
         axes[0, 0].text(-0.28, 0.5, "Nonlinear", rotation=90, transform=axes[0, 0].transAxes, va="center", ha="center", fontsize=10)
@@ -263,24 +275,45 @@ def main() -> None:
     plt.close(fig)
     print(f"[ok] wrote: {outprefix}.png and {outprefix}.pdf")
 
-    feasible = [item for item in results if item[5]["score"] <= float(args.target_error)]
-    if feasible:
-        feasible = sorted(feasible, key=lambda item: (item[5]["cost"], item[5]["score"]))
-        case, _tgrid, _err_nl, _err_lin, _color, metrics = feasible[0]
+    target = float(args.target_error)
+    feasible_nl = [item for item in results if item[5]["max_nl"] <= target]
+    if feasible_nl:
+        feasible_nl = sorted(feasible_nl, key=lambda item: (item[5]["cost"], item[5]["max_nl"]))
+        case, _tgrid, _err_nl, _err_lin, _color, metrics = feasible_nl[0]
         print(
-            "[recommend] smallest tested case meeting target "
-            f"E_rad <= {float(args.target_error):.2e}: "
+            "[recommend nonlinear] smallest tested case meeting target "
+            f"E_rad <= {target:.2e}: "
             f"nmax={case.nmax}, Q={case.Q}, maxK={case.maxK}, dt={case.dt:g} "
-            f"(score={metrics['score']:.3e}, cost_proxy={metrics['cost']:.3e})"
+            f"(max_nl={metrics['max_nl']:.3e}, cost_proxy={metrics['cost']:.3e})"
         )
     else:
-        best = min(results, key=lambda item: (item[5]["score"], item[5]["cost"]))
-        case, _tgrid, _err_nl, _err_lin, _color, metrics = best
+        best_nl = min(results, key=lambda item: (item[5]["max_nl"], item[5]["cost"]))
+        case, _tgrid, _err_nl, _err_lin, _color, metrics = best_nl
         print(
-            "[recommend] no tested case met target; best tested score: "
+            "[recommend nonlinear] no tested case met target; best tested case: "
             f"nmax={case.nmax}, Q={case.Q}, maxK={case.maxK}, dt={case.dt:g} "
-            f"(score={metrics['score']:.3e}, cost_proxy={metrics['cost']:.3e})"
+            f"(max_nl={metrics['max_nl']:.3e}, cost_proxy={metrics['cost']:.3e})"
         )
+
+    if str(args.linearized).lower() == "on":
+        feasible_lin = [item for item in results if np.isfinite(item[5]["max_lin"]) and item[5]["max_lin"] <= target]
+        if feasible_lin:
+            feasible_lin = sorted(feasible_lin, key=lambda item: (item[5]["cost"], item[5]["max_lin"]))
+            case, _tgrid, _err_nl, _err_lin, _color, metrics = feasible_lin[0]
+            print(
+                "[recommend linearized] smallest tested case meeting target "
+                f"E_rad <= {target:.2e}: "
+                f"nmax={case.nmax}, Q={case.Q}, maxK={case.maxK}, dt={case.dt:g} "
+                f"(max_lin={metrics['max_lin']:.3e}, cost_proxy={metrics['cost']:.3e})"
+            )
+        else:
+            best_lin = min(results, key=lambda item: (item[5]["max_lin"], item[5]["cost"]))
+            case, _tgrid, _err_nl, _err_lin, _color, metrics = best_lin
+            print(
+                "[recommend linearized] no tested case met target; best tested case: "
+                f"nmax={case.nmax}, Q={case.Q}, maxK={case.maxK}, dt={case.dt:g} "
+                f"(max_lin={metrics['max_lin']:.3e}, cost_proxy={metrics['cost']:.3e})"
+            )
 
 
 if __name__ == "__main__":
