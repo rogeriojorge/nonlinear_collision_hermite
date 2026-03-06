@@ -24,6 +24,7 @@ os.environ.setdefault("XDG_CACHE_HOME", str(HERE / ".cache"))
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
+from matplotlib.lines import Line2D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from landau_hermite_jax_relative_entropy import (
@@ -39,6 +40,7 @@ from landau_hermite_jax_relative_entropy import (
     make_linearized_rhs_1sp_jax,
     make_linearized_rhs_1sp_numpy,
     prepare_entropy_grid,
+    psi_1d,
     rhs_ab_np,
 )
 
@@ -68,6 +70,106 @@ def _nearest_indices(tgrid: np.ndarray, targets: Iterable[float]) -> List[int]:
 
 def _reconstruct_fxyz(f: np.ndarray, psi: np.ndarray) -> np.ndarray:
     return np.einsum("nmp,nx,my,pz->xyz", f, psi, psi, psi, optimize=True)
+
+
+def _psi0(p: int) -> np.ndarray:
+    return np.array([psi_1d(n, np.array([0.0]))[0] for n in range(p)], dtype=np.float64)
+
+
+def _reconstruct_plane_vy_vz(f: np.ndarray, psi: np.ndarray, psi0: np.ndarray) -> np.ndarray:
+    return np.einsum("nmp,n,my,pz->yz", f, psi0, psi, psi, optimize=True)
+
+
+def _circularity_defect(plane: np.ndarray, y: np.ndarray, z: np.ndarray, *, rel_floor: float = 0.05, nbins: int = 36) -> float:
+    plane = np.asarray(plane, dtype=np.float64)
+    peak = float(np.max(plane))
+    if (not np.isfinite(peak)) or peak <= 0.0:
+        return float("nan")
+    field = np.maximum(plane / peak, 0.0)
+    Y, Z = np.meshgrid(y, z, indexing="ij")
+    radius = np.sqrt(Y * Y + Z * Z)
+    mask = field >= float(rel_floor)
+    if not np.any(mask):
+        return 0.0
+
+    rvals = radius[mask]
+    fvals = field[mask]
+    rmax = float(np.max(rvals))
+    if rmax <= 1e-14:
+        return 0.0
+
+    edges = np.linspace(0.0, rmax, int(nbins) + 1)
+    bin_ids = np.clip(np.digitize(rvals, edges) - 1, 0, int(nbins) - 1)
+    counts = np.bincount(bin_ids, minlength=int(nbins)).astype(np.float64)
+    sums = np.bincount(bin_ids, weights=fvals, minlength=int(nbins)).astype(np.float64)
+    radial_mean = sums / np.maximum(counts, 1.0)
+    numer = np.sum((fvals - radial_mean[bin_ids]) ** 2)
+    denom = np.sum(radial_mean[bin_ids] ** 2) + 1e-300
+    return float(np.sqrt(numer / denom))
+
+
+def _plot_yz_slice_panel(
+    *,
+    outprefix: str,
+    histories: List[Tuple[str, np.ndarray]],
+    idxs: List[int],
+    tgrid: np.ndarray,
+    grid_x: np.ndarray,
+    psi: np.ndarray,
+    psi0: np.ndarray,
+    level_fracs: List[float],
+    colors: List[str],
+    xlim: float,
+    dpi: int,
+) -> None:
+    rows = len(histories)
+    cols = len(idxs)
+    fig, axes = plt.subplots(rows, cols, figsize=(3.0 * cols, 2.8 * rows), squeeze=False, sharex=True, sharey=True)
+    Y, Z = np.meshgrid(grid_x, grid_x, indexing="ij")
+    contour_handles = [
+        Line2D([0], [0], color=colors[k % len(colors)], lw=1.4, label=fr"$f/f_{{\max}}(t)={level_fracs[k]:.2f}$")
+        for k in range(len(level_fracs))
+    ]
+    image_artist = None
+
+    for row, (row_label, hist) in enumerate(histories):
+        for col, idx in enumerate(idxs):
+            ax = axes[row, col]
+            fxyz = _reconstruct_fxyz(hist[idx], psi)
+            plane = _reconstruct_plane_vy_vz(hist[idx], psi, psi0)
+            fmax = float(np.max(fxyz))
+            plane_norm = plane / max(fmax, 1e-300)
+            image_artist = ax.imshow(
+                np.clip(plane_norm.T, 0.0, 1.0),
+                origin="lower",
+                extent=[float(grid_x[0]), float(grid_x[-1]), float(grid_x[0]), float(grid_x[-1])],
+                cmap="cividis",
+                vmin=0.0,
+                vmax=1.0,
+                interpolation="nearest",
+                aspect="equal",
+            )
+            valid_levels = sorted({float(lvl) for lvl in level_fracs if np.min(plane_norm) < lvl < np.max(plane_norm)})
+            if valid_levels:
+                ax.contour(Y, Z, plane_norm, levels=valid_levels, colors=colors[: len(valid_levels)], linewidths=1.2)
+            ax.set_xlim(-xlim, xlim)
+            ax.set_ylim(-xlim, xlim)
+            if row == 0:
+                ax.set_title(fr"$t = {tgrid[idx]:.2f}$", pad=4)
+            if row == rows - 1:
+                ax.set_xlabel(r"$v_y / v_{th}$")
+            if col == 0:
+                ax.set_ylabel(r"$v_z / v_{th}$")
+            ax.tick_params(labelsize=8, pad=1)
+        fig.text(0.03, 0.72 - 0.44 * row, row_label, rotation=90, va="center", ha="center", fontsize=10)
+
+    fig.subplots_adjust(left=0.08, right=0.92, top=0.88, bottom=0.12, wspace=0.08, hspace=0.10)
+    fig.legend(handles=contour_handles, loc="upper center", bbox_to_anchor=(0.5, 0.97), ncol=len(contour_handles), frameon=False)
+    cbar = fig.colorbar(image_artist, ax=axes.ravel().tolist(), fraction=0.024, pad=0.02)
+    cbar.set_label(r"$f(v_x=0,v_y,v_z)/f_{\max}(t)$")
+    fig.savefig(f"{outprefix}_yzslice.png", dpi=dpi, bbox_inches="tight")
+    fig.savefig(f"{outprefix}_yzslice.pdf", bbox_inches="tight")
+    plt.close(fig)
 
 
 def _add_isosurface_skimage(ax, fxyz: np.ndarray, x0: float, dx: float, level: float, color: str, alpha: float) -> None:
@@ -121,6 +223,76 @@ def _style_axes(ax, xlim: float, label: str) -> None:
         pass
 
 
+def configure_plot_style(dpi: int) -> None:
+    mpl.rcParams.update(
+        {
+            "font.family": "serif",
+            "mathtext.fontset": "dejavuserif",
+            "font.size": 10,
+            "axes.titlesize": 11,
+            "axes.labelsize": 10,
+            "figure.dpi": float(dpi),
+        }
+    )
+
+
+def compute_twostream_histories(
+    *,
+    backend: str,
+    nmax: int,
+    Q: int,
+    maxK: int,
+    dt: float,
+    tmax: float,
+    steps: int | None,
+    u: float,
+    linearized: str = "on",
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    sp1 = Species(m=1.0, vth=1.0)
+    if steps is None:
+        nsteps = int(round(float(tmax) / float(dt)))
+    else:
+        nsteps = int(steps)
+    tgrid = np.linspace(0.0, nsteps * float(dt), nsteps + 1)
+    T11 = build_model_tables_np(nmax=nmax, Q=int(Q), maxK=int(maxK), ma=sp1.m, mb=sp1.m, vtha=sp1.vth, vthb=sp1.vth, nu_ab=1.0)
+    f0 = build_ic_fig1_1sp_twostream(nmax=nmax, sp=sp1, u=float(u), enforce_nonneg=False).f
+
+    if backend == "jax":
+        jax, jnp = _maybe_import_jax("jax")
+        assert jax is not None and jnp is not None
+        rhs11 = build_jax_functions(T11)
+        integrate_1sp_j, _ = build_integrators_jax(lambda f: rhs11(f, f), lambda a, b: (a, b), "ssprk3")
+        integrate_1sp_j = jax.jit(integrate_1sp_j, static_argnums=(2,))
+        f_hist = integrate_1sp_j(jnp.asarray(f0), float(dt), nsteps)
+        jax.block_until_ready(f_hist)
+        f_hist = np.array(f_hist)
+    else:
+        def rhs1_np(f: np.ndarray) -> np.ndarray:
+            return rhs_ab_np(f, f, T11, use_tt=False, tt_tol=0.0, tt_rmax=1)
+        f_hist = integrate_1sp_numpy(rhs1_np, f0, float(dt), nsteps, "ssprk3")
+
+    f_hist_lin = None
+    if str(linearized).lower() == "on":
+        inv0 = invariants_from_tensor(f0, sp1)
+        fM = build_maxwellian_tensor_from_invariants(nmax=nmax, sp=sp1, inv=inv0, xlim=10.0, nx=2001)
+        if backend == "jax":
+            jax, jnp = _maybe_import_jax("jax")
+            assert jax is not None and jnp is not None
+            rhs11 = build_jax_functions(T11)
+            L_apply = make_linearized_rhs_1sp_jax(rhs11, jnp.asarray(fM))
+            integrate_1sp_lin, _ = build_integrators_jax(lambda f: L_apply(f), lambda a, b: (a, b), "ssprk3")
+            integrate_1sp_lin = jax.jit(integrate_1sp_lin, static_argnums=(2,))
+            df_hist = integrate_1sp_lin(jnp.asarray(f0 - fM), float(dt), nsteps)
+            jax.block_until_ready(df_hist)
+            f_hist_lin = np.array(df_hist) + fM[None, ...]
+        else:
+            L_apply_np = make_linearized_rhs_1sp_numpy(T11, fM, use_tt=False, tt_tol=0.0, tt_rmax=1)
+            df_hist = integrate_1sp_numpy(L_apply_np, f0 - fM, float(dt), nsteps, "ssprk3")
+            f_hist_lin = df_hist + fM[None, ...]
+
+    return tgrid, f_hist, f_hist_lin
+
+
 # ----------------------------
 # Main
 # ----------------------------
@@ -146,76 +318,29 @@ def main() -> None:
     ap.add_argument("--linearized", choices=["on", "off"], default="on")
     args = ap.parse_args()
 
-    # Styling for publication quality.
-    mpl.rcParams.update(
-        {
-            "font.family": "serif",
-            "mathtext.fontset": "dejavuserif",
-            "font.size": 10,
-            "axes.titlesize": 11,
-            "axes.labelsize": 10,
-            "figure.dpi": float(args.dpi),
-        }
-    )
+    configure_plot_style(int(args.dpi))
 
     backend = str(args.backend)
     nmax = int(args.nmax)
     p = nmax + 1
-
-    if args.steps is None:
-        steps = int(round(float(args.tmax) / float(args.dt)))
-    else:
-        steps = int(args.steps)
-    tmax = steps * float(args.dt)
-    tgrid = np.linspace(0.0, tmax, steps + 1)
-
-    # Species and model tables.
-    sp1 = Species(m=1.0, vth=1.0)
-    T11 = build_model_tables_np(nmax=nmax, Q=int(args.Q), maxK=int(args.maxK), ma=sp1.m, mb=sp1.m, vtha=sp1.vth, vthb=sp1.vth, nu_ab=1.0)
-
-    # Initial condition (twostream).
-    ic = build_ic_fig1_1sp_twostream(nmax=nmax, sp=sp1, u=float(args.u), enforce_nonneg=False)
-    f0 = ic.f
-
-    # Integrate in time (nonlinear).
-    if backend == "jax":
-        jax, jnp = _maybe_import_jax("jax")
-        assert jax is not None and jnp is not None
-        rhs11 = build_jax_functions(T11)
-        integrate_1sp_j, _ = build_integrators_jax(lambda f: rhs11(f, f), lambda a, b: (a, b), "ssprk3")
-        integrate_1sp_j = jax.jit(integrate_1sp_j, static_argnums=(2,))
-        f_hist = integrate_1sp_j(jnp.asarray(f0), float(args.dt), steps)
-        jax.block_until_ready(f_hist)
-        f_hist = np.array(f_hist)
-    else:
-        def rhs1_np(f):
-            return rhs_ab_np(f, f, T11, use_tt=False, tt_tol=0.0, tt_rmax=1)
-        f_hist = integrate_1sp_numpy(rhs1_np, f0, float(args.dt), steps, "ssprk3")
-
-    # Optional linearized evolution about the equilibrium Maxwellian with the same invariants.
-    f_hist_lin = None
-    if str(args.linearized).lower() == "on":
-        inv0 = invariants_from_tensor(f0, sp1)
-        fM = build_maxwellian_tensor_from_invariants(nmax=nmax, sp=sp1, inv=inv0, xlim=10.0, nx=2001)
-        if backend == "jax":
-            jax, jnp = _maybe_import_jax("jax")
-            assert jax is not None and jnp is not None
-            L_apply = make_linearized_rhs_1sp_jax(rhs11, jnp.asarray(fM))
-            integrate_1sp_lin, _ = build_integrators_jax(lambda f: L_apply(f), lambda a, b: (a, b), "ssprk3")
-            integrate_1sp_lin = jax.jit(integrate_1sp_lin, static_argnums=(2,))
-            df0 = jnp.asarray(f0 - fM)
-            df_hist = integrate_1sp_lin(df0, float(args.dt), steps)
-            jax.block_until_ready(df_hist)
-            f_hist_lin = np.array(df_hist) + fM[None, ...]
-        else:
-            L_apply_np = make_linearized_rhs_1sp_numpy(T11, fM, use_tt=False, tt_tol=0.0, tt_rmax=1)
-            df_hist = integrate_1sp_numpy(L_apply_np, f0 - fM, float(args.dt), steps, "ssprk3")
-            f_hist_lin = df_hist + fM[None, ...]
+    tgrid, f_hist, f_hist_lin = compute_twostream_histories(
+        backend=backend,
+        nmax=nmax,
+        Q=int(args.Q),
+        maxK=int(args.maxK),
+        dt=float(args.dt),
+        tmax=float(args.tmax),
+        steps=args.steps,
+        u=float(args.u),
+        linearized=str(args.linearized),
+    )
+    tmax = float(tgrid[-1])
 
     # Entropy grid reused to reconstruct f(x,y,z).
     grid = prepare_entropy_grid(nmax=nmax, xlim=float(args.grid_xlim), nx=int(args.grid_nx))
     x = grid.x
     dx = grid.dx
+    psi0 = _psi0(p)
 
     # Snapshot times.
     snap_raw = _parse_float_list(str(args.snapshots))
@@ -282,6 +407,21 @@ def main() -> None:
     fig.savefig(f"{outprefix}.png", dpi=int(args.dpi), bbox_inches="tight")
     fig.savefig(f"{outprefix}.pdf", bbox_inches="tight")
     print(f"[ok] wrote: {outprefix}.png and {outprefix}.pdf")
+
+    _plot_yz_slice_panel(
+        outprefix=outprefix,
+        histories=histories,
+        idxs=idxs,
+        tgrid=tgrid,
+        grid_x=x,
+        psi=grid.psi,
+        psi0=psi0,
+        level_fracs=level_fracs,
+        colors=colors,
+        xlim=float(args.grid_xlim),
+        dpi=int(args.dpi),
+    )
+    print(f"[ok] wrote: {outprefix}_yzslice.png and {outprefix}_yzslice.pdf")
 
     if not _HAVE_SKIMAGE:
         print("[note] skimage not available; used scatter fallback for isosurfaces.")
