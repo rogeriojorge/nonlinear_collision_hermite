@@ -114,6 +114,7 @@ def main() -> None:
     ap.add_argument("--tmax", type=float, default=15.0)
     ap.add_argument("--steps", type=int, default=None)
     ap.add_argument("--u", type=float, default=1.5)
+    ap.add_argument("--nu_LB", type=float, default=0.1)
     ap.add_argument("--grid_xlim", type=float, default=3.0)
     ap.add_argument("--polar_nr", type=int, default=64)
     ap.add_argument("--polar_nth", type=int, default=128)
@@ -164,6 +165,7 @@ def main() -> None:
     curves_all: List[np.ndarray] = []
     color_index = {family: 0 for family in family_order}
     for case in cases:
+        nu_LB_here = max(float(args.nu_LB), 1e-300)/(case.nmax-1)/(case.nmax-2)/(case.nmax-3)  # avoid zero collisionality (no LB damping) which can cause issues at low nmax
         print(f"[run] {case.family}: {case.label} ...", flush=True)
         tgrid, f_hist, f_hist_lin = compute_twostream_histories(
             backend=str(args.backend),
@@ -175,6 +177,7 @@ def main() -> None:
             steps=args.steps,
             u=float(args.u),
             linearized=str(args.linearized),
+            nu_LB=nu_LB_here,
         )
         err_nl = np.maximum(
             _symmetry_error_history(

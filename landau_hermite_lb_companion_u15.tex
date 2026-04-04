@@ -1,0 +1,614 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[nameinlink,capitalize]{cleveref}
+\usepackage{enumitem}
+\usepackage{float}
+
+\graphicspath{{report_figs_u15/}}
+\hypersetup{colorlinks=true, linkcolor=blue!60!black, citecolor=blue!60!black, urlcolor=blue!60!black}
+\sisetup{detect-all=true}
+
+\title{Supplemental Material:\\Strong Two-Stream Relaxation, Discrete Symmetry Breaking,\\and Lenard--Bernstein Regularization in the Hermite--JAX Landau Solver}
+\author{R. Jorge}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report accompanies the main PRL manuscript and revisits the full Hermite--JAX Landau analysis suite in the stronger two-stream regime $u=1.5$.
+All five companion scripts were rerun with and without Lenard--Bernstein (LB) regularization, with detailed comparisons at $n_{\max}=6$ and $n_{\max}=10$, and with additional higher-$n_{\max}$ sweeps to check whether the conclusions persist.
+Three conclusions are robust.
+First, in the truncated Cartesian Hermite representation, the nonlinear Landau operator remains substantially more faithful to the axial symmetry of the exact problem than the discrete linearized operator.
+Second, increasing $n_{\max}$ is still the main way to recover the correct symmetry; retuning $\Delta t$, $Q$, or \texttt{maxK} is secondary.
+Third, a weak LB term can act as a useful numerical sponge, but in the present diagonal implementation it is not conservative and therefore changes the physical relaxation as soon as it becomes strong enough to visibly clean the symmetry defect.
+The best operational compromise among the cases tested here is to use the nonlinear Landau operator with $u=1.5$, $\nu_{\mathrm{LB}}=0.02$, and $\Delta t=0.10$ only for regularized exploratory runs, while keeping $\nu_{\mathrm{LB}}=0$ for quantitative physics.
+\end{abstract}
+
+\section{Scope and positioning}
+This note is written as a manuscript-ready companion to the main PRL submission.
+Its purpose is narrower and more technical than the Letter itself.
+The PRL focuses on the Coulomb-integral formulation of the nonlinear Landau operator and on the main nonlinear-versus-linearized physics comparison.
+The present report documents, in one place, the numerical evidence behind three implementation-level claims that matter for interpreting those results:
+\begin{enumerate}[leftmargin=1.5em]
+    \item the exact homogeneous two-stream problem is axisymmetric about the streaming axis, but a truncated Cartesian Hermite representation can leak non-axisymmetric angular content;
+    \item in this representation, the discrete nonlinear and discrete linearized collision operators do not leak that symmetry equally, with the discrete linearized operator being markedly less faithful;
+    \item a weak Lenard--Bernstein (LB) term can suppress high-order Hermite contamination, but it does so by adding nonphysical damping and, in the present implementation, by sacrificing exact conservation.
+\end{enumerate}
+The report is therefore not an argument for replacing the nonlinear Landau operator by an LB model.
+It is instead a detailed statement of what the code is solving, what numerical artifacts appear at finite truncation, and what one gains and loses by adding a small Hermite-diagonal regularization.
+The discussion is anchored in several adjacent strands of the literature.
+Hermite and Laguerre--Hermite spectral discretizations are attractive because they expose moment structure efficiently and can represent collision operators with sparse or precomputable couplings \cite{li2021hermite,mandell2018laguerre}.
+At the same time, exact or exact-linearized Landau operators are known to matter for conservation, entropy production, and quantitative dissipation rates \cite{madsen2013linearized,pan2020exact,hirvijoki2022metriplectic,pezzi2017solarwind}.
+Model operators such as Lenard--Bernstein and Dougherty remain computationally useful, but they alter damping rates and eigenmode structure unless corrected carefully to enforce the desired invariants \cite{lenard1958plasma,dougherty1964model,jorge2019collisionality,jeyakumar2024lb,belli2017advanced}.
+
+\section{What was rerun}
+The report uses five scripts in
+\texttt{/Users/rogeriojorge/local/nonlinear\_collision\_hermite}:
+\begin{enumerate}[leftmargin=1.5em]
+    \item \texttt{landau\_hermite\_jax\_relative\_entropy.py}: main Fig.~1 workflow with one-species and two-species runs, invariants, entropy, and linearized overlays.
+    \item \texttt{landau\_hermite\_jax\_relative\_entropy\_2.py}: 3D velocity-space isosurfaces and $v_x=0$ transverse slices.
+    \item \texttt{landau\_hermite\_jax\_relative\_entropy\_3.py}: time histories of the transverse symmetry defect versus $n_{\max}$.
+    \item \texttt{landau\_hermite\_jax\_relative\_entropy\_4.py}: sweeps in $(n_{\max},\Delta t,Q,\texttt{maxK})$.
+    \item \texttt{landau\_hermite\_jax\_relative\_entropy\_5.py}: direct comparison of the discrete background defect and of the nonlinear versus linearized RHS defects.
+\end{enumerate}
+
+All of these scripts now default to the stronger two-stream separation $u=1.5$.
+The comparison shown throughout is between
+\begin{itemize}[leftmargin=1.5em]
+    \item \textbf{unregularized runs:} $\nu_{\mathrm{LB}}=0$,
+    \item \textbf{regularized runs:} $\nu_{\mathrm{LB}}=0.02$ with $\Delta t=0.10$.
+\end{itemize}
+The choice $\nu_{\mathrm{LB}}=0.02$ is not a statement that LB is physically preferred; it is simply the smallest tested value that gives a clear visible reduction of the nonlinear symmetry defect in the strong two-stream case while remaining comfortably stable for $n_{\max}\le 10$.
+
+\section{Equations solved in the code}
+The main script evolves homogeneous Hermite coefficients for either a one-species or two-species problem.
+Writing the distribution as
+\begin{equation}
+f_s(\mathbf v,t)=\sum_{nmp} f^s_{nmp}(t)\,\psi_n(v_x/v_{\mathrm{th},s})\psi_m(v_y/v_{\mathrm{th},s})\psi_p(v_z/v_{\mathrm{th},s}),
+\end{equation}
+the code advances the coefficients under the collision-only equation
+\begin{equation}
+\partial_t f_a = \sum_b C_{ab}(f_a,f_b),
+\end{equation}
+with $C_{ab}$ the bilinear Landau operator discretized in the Hermite basis.
+In coefficient form this is evaluated as
+\begin{equation}
+\frac{d}{dt} f^a_k = Q^{aa}_k(f_a,f_a) + Q^{ab}_k(f_a,f_b),
+\end{equation}
+where $Q$ denotes the nonlinear Hermite-space Landau RHS assembled through the sum-of-exponentials kernel separation and tensor-product contractions described in the main manuscript.
+This organization is close in spirit to the Hermite-spectral FPL strategy of Li, Ren, and Wang, who also combine an exact low-order treatment with a reduced description of unresolved high-order structure \cite{li2021hermite}.
+
+For the linearized comparison, the code writes
+\begin{equation}
+f = M + h,
+\end{equation}
+with $M$ the matched equilibrium Maxwellian built from the low moments of the current state, and then evolves
+\begin{equation}
+\partial_t h = L_M[h],\qquad
+L_M[h] = Q(h,M) + Q(M,h).
+\label{eq:linearized_u15}
+\end{equation}
+This is exactly the operator applied in the JAX tangent/JVP implementation and in the NumPy cross-checks.
+In the continuum, the operator in \cref{eq:linearized_u15} inherits the same rotational invariance as the underlying Landau bilinear form when $M$ is isotropic \cite{madsen2013linearized,pan2020exact}.
+
+The optional regularization added in the present code path is
+\begin{equation}
+\partial_t f = Q(f,f) + C_{\mathrm{LB}}[f],
+\qquad
+\partial_t h = L_M[h] + C_{\mathrm{LB}}[h],
+\label{eq:lb_rhs_u15}
+\end{equation}
+with the Hermite-diagonal LB term
+\begin{equation}
+C_{\mathrm{LB}}[f]_{nmp}=-\nu_{\mathrm{LB}}(n+m+p)f_{nmp}.
+\label{eq:LB_u15_main}
+\end{equation}
+The term in \cref{eq:LB_u15_main} is not intended to model Coulomb physics accurately.
+It is a numerical damping operator that preferentially removes high-order Hermite content.
+Because it damps every nonzero Hermite mode, it preserves density but not momentum or energy.
+The form is inspired by the classical Lenard--Bernstein model \cite{lenard1958plasma}; the nonlinear Dougherty operator is a more refined Fokker--Planck surrogate intended to retain more of the low-moment structure \cite{dougherty1964model}.
+Modern comparisons show that such simplified operators can differ substantially from full Coulomb collisions in damping rates and spectra \cite{jorge2019collisionality,belli2017advanced}, while recent structure-preserving LB discretizations emphasize that conservation must be built in explicitly rather than assumed \cite{jeyakumar2024lb}.
+
+The strong one-species initial condition used in all five scripts is the projected two-stream state
+\begin{equation}
+f(\mathbf v,0) \propto \frac{1}{2}\left[M(v_x-u)+M(v_x+u)\right]M(v_y)M(v_z),
+\qquad u=1.5,
+\label{eq:twostream_u15}
+\end{equation}
+which is axisymmetric about the $v_x$ axis.
+For the exact homogeneous Landau dynamics, the dependence should remain $f(v_x,v_\perp,t)$, with no angular dependence on the azimuth in the $(v_y,v_z)$ plane.
+
+\section{Exact symmetry expectation and diagnostic}
+For the homogeneous two-stream initial condition used here, the exact Landau evolution is axisymmetric about $v_x$:
+\begin{equation}
+f(\mathbf v,t)=f(v_x,v_\perp,t), \qquad v_\perp=\sqrt{v_y^2+v_z^2}.
+\end{equation}
+Accordingly, the exact $v_x=0$ slice should remain circular in the $(v_y,v_z)$ plane.
+
+To quantify deviations from this symmetry, define
+\begin{equation}
+g(v_y,v_z;t)=f(0,v_y,v_z,t).
+\end{equation}
+At fixed radius $r=\sqrt{v_y^2+v_z^2}$, let
+\begin{equation}
+\langle g\rangle_\theta(r,t)=\frac{1}{2\pi}\int_0^{2\pi}g(r\cos\theta,r\sin\theta;t)\,d\theta,
+\end{equation}
+and define the non-axisymmetric part
+\begin{equation}
+\delta g(v_y,v_z;t)=g(v_y,v_z;t)-\langle g\rangle_\theta(r,t).
+\end{equation}
+The scalar metric used in Scripts~3--5 is
+\begin{equation}
+E_{\mathrm{ang}}(t)=
+\left[
+\frac{\int (\delta g)^2\,dA}{\int \langle g\rangle_\theta^2\,dA}
+\right]^{1/2}.
+\label{eq:Eang_u15}
+\end{equation}
+By construction, $E_{\mathrm{ang}}=0$ means a perfectly circular $v_x=0$ slice.
+
+The same metric is used in the final-time comparisons in Scripts~3--5, in the direct nonlinear/linearized source analysis, and in the LB tradeoff scans.
+It is a deliberately strict metric: it does not merely detect ellipticity.
+It also detects higher-order angular distortions such as the fourfold pattern associated with the first non-axisymmetric Cartesian tensor component.
+Indeed, in the $(v_y,v_z)$ plane, the leading spurious angular harmonic allowed by a Cartesian Hermite truncation is
+\begin{equation}
+v_y^4 - 6v_y^2v_z^2 + v_z^4 \;\propto\; r^4 \cos(4\theta),
+\label{eq:cos4theta_u15}
+\end{equation}
+which produces the rounded-square patterns seen in several of the slice plots below.
+This is why a metric based only on $T_y-T_z$ would miss a substantial part of the observed symmetry loss.
+More generally,
+\begin{equation}
+g(r,\theta,t)=g_0(r,t)+\sum_{\ell\ge 1} g_{4\ell}(r,t)\cos(4\ell\theta),
+\label{eq:angular_modes_u15}
+\end{equation}
+because the discrete problem still preserves reflections in $v_y$ and $v_z$ and the exchange symmetry $v_y\leftrightarrow v_z$, even when it fails to preserve continuous $O(2)$ rotational symmetry.
+The exact axisymmetric solution has only the $g_0$ term.
+The truncated Cartesian Hermite representation leaks into the $\cos(4\theta),\cos(8\theta),\ldots$ sectors, and \cref{eq:Eang_u15} is effectively a norm of that leaked angular content.
+
+\section{What changes at $u=1.5$}
+At $u=1.5$ the distinction between nonlinear and linearized evolution is no longer subtle.
+In the unregularized case, the nonlinear and linearized solutions move to visibly different regions of phase space, both in 3D and in the $v_x=0$ slices.
+\Cref{fig:phase3d} shows the $n_{\max}=10$ case.
+This stronger-drive regime is useful precisely because it stresses the same point highlighted by Pezzi in full-Landau solar-wind calculations \cite{pezzi2017solarwind}: once the state is appreciably non-Maxwellian, the difference between a full nonlinear collision operator and a linearized or simplified surrogate is no longer a minor perturbative detail.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{0.49\linewidth}
+        \includegraphics[width=\linewidth]{panel3d_n10_nu0.pdf}
+        \caption{$\nu_{\mathrm{LB}}=0$}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.49\linewidth}
+        \includegraphics[width=\linewidth]{panel3d_n10_nu002.pdf}
+        \caption{$\nu_{\mathrm{LB}}=0.02$}
+    \end{subfigure}
+    \caption{3D velocity-space isosurfaces from Script~2 for $n_{\max}=10$ and $u=1.5$.
+    Without regularization, the nonlinear solution retains a visibly distorted core while the linearized solution develops a strongly non-axisymmetric multi-lobed structure.
+    Adding $\nu_{\mathrm{LB}}=0.02$ damps both, but the nonlinear solution becomes much closer to an axisymmetric Maxwellian-like state than the linearized one.}
+    \label{fig:phase3d}
+\end{figure}
+
+\Cref{fig:yzslices_u15} shows the corresponding $v_x=0$ slices for $n_{\max}=6$.
+This is the clearest view of the symmetry problem.
+At late times, the unregularized nonlinear solution develops a fourfold distortion while the linearized solution develops an even stronger cross-like structure.
+The LB term suppresses much of that contamination, but it does not make the linearized solution genuinely symmetry-faithful.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{0.49\linewidth}
+        \includegraphics[width=\linewidth]{panel3d_n6_nu0_yzslice.pdf}
+        \caption{$n_{\max}=6$, $\nu_{\mathrm{LB}}=0$}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.49\linewidth}
+        \includegraphics[width=\linewidth]{panel3d_n6_nu002_yzslice.pdf}
+        \caption{$n_{\max}=6$, $\nu_{\mathrm{LB}}=0.02$}
+    \end{subfigure}
+    \caption{$v_x=0$ slices from Script~2.
+    The exact solution should preserve circular contours in $(v_y,v_z)$.
+    The strong two-stream case makes the difference between nonlinear and linearized evolution explicit: without LB damping the nonlinear solution acquires a fourfold core distortion, while the linearized solution develops a more severe non-axisymmetric cross pattern.
+    The regularized run is visibly cleaner, especially for the nonlinear operator.}
+    \label{fig:yzslices_u15}
+\end{figure}
+
+The same conclusion remains visible at the higher resolution $n_{\max}=10$, shown in \cref{fig:yzslices_n10_u15}.
+Increasing $n_{\max}$ reduces the nonlinear distortion substantially, but the nonlinear and linearized solutions still relax to visibly different transverse structures.
+LB damping again suppresses the nonlinear fourfold distortion much more efficiently than it suppresses the linearized one.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{0.49\linewidth}
+        \includegraphics[width=\linewidth]{panel3d_n10_nu0_yzslice.pdf}
+        \caption{$n_{\max}=10$, $\nu_{\mathrm{LB}}=0$}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.49\linewidth}
+        \includegraphics[width=\linewidth]{panel3d_n10_nu002_yzslice.pdf}
+        \caption{$n_{\max}=10$, $\nu_{\mathrm{LB}}=0.02$}
+    \end{subfigure}
+    \caption{Higher-resolution transverse slices from Script~2.
+    The nonlinear operator improves significantly when $n_{\max}$ is increased from 6 to 10, consistent with a truncation-driven artifact.
+    The linearized operator remains qualitatively more distorted, and the LB term still acts primarily as a visual cleanup for the nonlinear branch rather than as a cure for the linearized symmetry defect.}
+    \label{fig:yzslices_n10_u15}
+\end{figure}
+
+\section{Why the linearized operator is still the worst offender}
+The continuum linearized Landau operator about an isotropic Maxwellian background is rotationally invariant.
+Therefore the large symmetry loss in the discrete linearized runs is not physical.
+
+The culprit remains the same as in the weaker case: the matched Maxwellian background used in the discrete linearized evolution is itself only approximately rotationally invariant after projection to the finite Cartesian Hermite basis.
+The discrete linearized operator
+\begin{equation}
+L_M[h]=Q(h,M)+Q(M,h)
+\end{equation}
+then amplifies this background defect.
+
+\Cref{fig:symbreak_u15} makes this explicit for the stronger two-stream case.
+Panel~(a) shows the defect of the matched projected background.
+Panel~(b) shows the nonlinear RHS defect.
+Panel~(c) shows the linearized RHS defect.
+The bottom panel compares the corresponding axisymmetry errors versus $n_{\max}$.
+Two features are robust.
+First, the linearized discrete RHS remains much less symmetry-faithful than the nonlinear one.
+Second, replacing the matched background by the basis Maxwellian again lowers the linearized defect substantially.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{0.49\linewidth}
+        \includegraphics[width=\linewidth]{sweep5_nu0.pdf}
+        \caption{$\nu_{\mathrm{LB}}=0$}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.49\linewidth}
+        \includegraphics[width=\linewidth]{sweep5_nu002.pdf}
+        \caption{$\nu_{\mathrm{LB}}=0.02$}
+    \end{subfigure}
+    \caption{Direct diagnosis of the discrete symmetry source from Script~5.
+    The matched projected background $M$ is already not exactly rotationally invariant.
+    The nonlinear discrete RHS $Q(f_0,f_0)$ inherits that defect mildly, whereas the linearized discrete RHS $L_M(h_0)$ amplifies it strongly.
+    The control curve labeled ``basis $M$'' confirms that the projected background is the dominant source.
+    LB damping helps somewhat, but it does not remove the structural weakness of the discrete linearized operator.}
+    \label{fig:symbreak_u15}
+\end{figure}
+
+\begin{table}[H]
+    \centering
+    \caption{Axisymmetry errors from Script~5 for the strong two-stream case at $\nu_{\mathrm{LB}}=0$.
+    $E(M)$ is the defect of the matched projected background, $E(Qff)$ is the defect of the nonlinear discrete RHS, $E(L_{\rm match}h_0)$ is the defect of the discrete linearized RHS built from the matched projected background, and $E(L_{\rm basis}h_0)$ is the same quantity linearized about the basis Maxwellian.
+    The ordering is the central point: the discrete linearized RHS is consistently and often dramatically less symmetry-faithful than the nonlinear RHS.}
+    \label{tab:symbreak_source_u15}
+    \begin{tabular}{@{}ccccc@{}}
+    \toprule
+    $n_{\max}$ & $E(M)$ & $E(Qff)$ & $E(L_{\rm match}h_0)$ & $E(L_{\rm basis}h_0)$ \\
+    \midrule
+    6  & $7.327\times10^{-2}$ & $2.854\times10^{-1}$ & $1.077\times10^{1}$ & $4.918\times10^{-1}$ \\
+    10 & $1.348\times10^{-2}$ & $1.913\times10^{-2}$ & $5.999\times10^{-1}$ & $7.257\times10^{-2}$ \\
+    12 & $5.405\times10^{-3}$ & $9.013\times10^{-3}$ & $1.689\times10^{-1}$ & $2.642\times10^{-2}$ \\
+    14 & $--$ & $6.878\times10^{-2}$ & $2.372\times10^{0}$ & $--$ \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+The physics interpretation is important.
+Nothing in continuum linearized Landau theory predicts a loss of axial symmetry here.
+The loss is instead a consequence of how the background $M$ is represented on a finite Cartesian tensor basis.
+Once that slightly non-axisymmetric background is inserted into \cref{eq:linearized_u15}, the linearized RHS acquires symmetry-breaking content at first order.
+By contrast, the nonlinear operator uses the same truncated object in both slots, so some of the angular error cancels.
+This is why the nonlinear branch remains more accurate even before any appeal to entropy or conservation properties.
+This point is consistent with the broader exact-Landau literature.
+Conservative formulations of the Landau operator are built to keep the symmetry between test-particle and field-particle pieces explicit, because that symmetry underlies exact conservation laws and entropy production \cite{pan2020exact,hirvijoki2022metriplectic}.
+Our numerical evidence adds a geometric interpretation: in a truncated Cartesian Hermite representation, preserving the full nonlinear bilinear structure also reduces spurious leakage into forbidden angular sectors.
+
+\section{Main Fig.~1 workflow with and without LB damping}
+The full Fig.~1 workflow was rerun at $n_{\max}=6$ and $10$.
+The results are summarized in \cref{fig:fig1_u15,tab:fig1_u15}.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{0.48\linewidth}
+        \includegraphics[width=\linewidth]{Fig1_n6_nu0.pdf}
+        \caption{$n_{\max}=6$, $\nu_{\mathrm{LB}}=0$}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.48\linewidth}
+        \includegraphics[width=\linewidth]{Fig1_n6_nu002.pdf}
+        \caption{$n_{\max}=6$, $\nu_{\mathrm{LB}}=0.02$}
+    \end{subfigure}
+
+    \medskip
+
+    \begin{subfigure}{0.48\linewidth}
+        \includegraphics[width=\linewidth]{Fig1_n10_nu0.pdf}
+        \caption{$n_{\max}=10$, $\nu_{\mathrm{LB}}=0$}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.48\linewidth}
+        \includegraphics[width=\linewidth]{Fig1_n10_nu002.pdf}
+        \caption{$n_{\max}=10$, $\nu_{\mathrm{LB}}=0.02$}
+    \end{subfigure}
+    \caption{Main Fig.~1 workflow rerun at $u=1.5$.
+    The LB term visibly damps the long-time one-species distortion and accelerates the two-species temperature relaxation, but it also introduces large energy drift because the present implementation damps all nonzero Hermite moments.}
+    \label{fig:fig1_u15}
+\end{figure}
+
+\begin{table}[H]
+    \centering
+    \caption{End-of-run metrics from the main Fig.~1 workflow at $u=1.5$ and $\Delta t=0.10$.
+    The LB regularization clearly reduces the one-species shape defect, but it also introduces order-\(10^{-1}\) energy drift in the current nonconservative implementation.}
+    \label{tab:fig1_u15}
+    \begin{tabular}{@{}cccccc@{}}
+    \toprule
+    $n_{\max}$ & $\nu_{\mathrm{LB}}$ & $A(t_{\max})/A_0$ & shape defect & $\max |\Delta W|/W_0$ (1sp) & $\max |\Delta W_{\rm tot}|/W_0$ (2sp) \\
+    \midrule
+    6  & 0     & $9.824\times10^{-2}$ & $5.143\times10^{-1}$ & $1.206\times10^{-12}$ & $3.553\times10^{-15}$ \\
+    6  & 0.02  & $3.235\times10^{-2}$ & $5.885\times10^{-2}$ & $2.617\times10^{-1}$ & $9.024\times10^{-2}$ \\
+    10 & 0     & $9.903\times10^{-2}$ & $4.392\times10^{-1}$ & $1.232\times10^{-13}$ & $3.553\times10^{-15}$ \\
+    10 & 0.02  & $3.772\times10^{-2}$ & $2.148\times10^{-2}$ & $2.702\times10^{-1}$ & $9.024\times10^{-2}$ \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+The table makes the numerical tradeoff explicit.
+The unregularized runs preserve energy to roundoff, but the strong one-species branch develops a large long-time shape defect.
+The LB-regularized runs sharply reduce that defect and push the one-species solution closer to the expected isotropic end state, but they do so at the cost of order-$10^{-1}$ energy drift.
+That is precisely why the regularized setting should be used, at most, as a disclosed numerical aid for long-time visualization or for exploratory parameter scans.
+This is also the correct way to read the model-operator literature:
+LB- and Dougherty-type closures are useful computational tools, but their effect on relaxation rates and long-time states must be assessed quantitatively rather than assumed harmless \cite{belli2017advanced,jorge2019collisionality}.
+
+\section{Resolution remains the primary cure}
+\Cref{fig:sweep3_u15} shows the time history of the axisymmetry error for $n_{\max}=6,10,12,14$.
+Without LB damping, the nonlinear error falls strongly with increasing resolution, but the linearized error remains large over the full time interval.
+Adding $\nu_{\mathrm{LB}}=0.02$ lowers the nonlinear curves across the board and helps the linearized ones, but the linearized solution is still much less symmetry-preserving than the nonlinear one even at the largest resolution tested.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{0.49\linewidth}
+        \includegraphics[width=\linewidth]{sweep3_nu0.pdf}
+        \caption{$\nu_{\mathrm{LB}}=0$}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.49\linewidth}
+        \includegraphics[width=\linewidth]{sweep3_nu002.pdf}
+        \caption{$\nu_{\mathrm{LB}}=0.02$}
+    \end{subfigure}
+    \caption{Axisymmetry-error histories from Script~3.
+    The main trend is unchanged from the weaker case: increasing $n_{\max}$ is the primary way to reduce the nonlinear symmetry defect.
+    The linearized curves remain much larger and much less well controlled.}
+    \label{fig:sweep3_u15}
+\end{figure}
+
+The larger-$n_{\max}$ trend is therefore physically sensible for the nonlinear branch and not for the linearized one.
+As $n_{\max}$ increases, the nonlinear branch steadily approaches the expected axisymmetric dynamics.
+The linearized branch does not show the same clean monotone convergence, which is consistent with the mechanism identified in \cref{fig:symbreak_u15}: it is limited not only by truncation of the evolving state, but also by the way the projected background enters the discrete linearized RHS.
+There is a simple representation-theoretic reason for this.
+An exactly axisymmetric function of $(v_y,v_z)$ is naturally sparse in a polar or Laguerre representation but not in a Cartesian tensor-Hermite representation.
+In Cartesian moments, circularity is encoded by an infinite set of algebraic relations among even moments.
+Low-$n_{\max}$ truncation breaks those relations.
+This is precisely why Laguerre--Hermite formulations are attractive in problems where perpendicular symmetry is central \cite{mandell2018laguerre}, and it clarifies why increasing $n_{\max}$ helps here even though the basis itself is not symmetry adapted.
+
+Script~4 confirms that changing $\Delta t$, $Q$, or \texttt{maxK} is secondary once the timestep is stable.
+\Cref{fig:sweep4_u15} shows the corresponding parameter scans.
+For the unregularized case, no tested parameter set reaches the target axisymmetry threshold \(E_{\mathrm{ang}}\le 3\times 10^{-2}\) in the nonlinear run; the best tested case is \(n_{\max}=14\), \(Q=20\), \texttt{maxK}$=512$, \(\Delta t=0.15\), with \(\max_t E_{\mathrm{ang}}\approx 5.85\times 10^{-2}\).
+With $\nu_{\mathrm{LB}}=0.02$, the smallest tested nonlinear case that does meet the target is \(n_{\max}=10\), \(Q=12\), \texttt{maxK}$=256$, \(\Delta t=0.15\), but the linearized run still does not meet the target.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{0.49\linewidth}
+        \includegraphics[width=\linewidth]{sweep4_nu0.pdf}
+        \caption{$\nu_{\mathrm{LB}}=0$}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.49\linewidth}
+        \includegraphics[width=\linewidth]{sweep4_nu002.pdf}
+        \caption{$\nu_{\mathrm{LB}}=0.02$}
+    \end{subfigure}
+    \caption{Parameter sweeps from Script~4.
+    Once the timestep is stable, changing $\Delta t$, $Q$, or \texttt{maxK} has much smaller effect than increasing $n_{\max}$.
+    The nonlinear operator can be made acceptably symmetric with a combination of larger $n_{\max}$ and LB damping, but the linearized operator remains the dominant source of symmetry loss.}
+    \label{fig:sweep4_u15}
+\end{figure}
+
+\section{Extended $\nu_{\mathrm{LB}}$ scans and larger-$n_{\max}$ checks}
+To move beyond the two baseline resolutions, we also assembled a final-time tradeoff scan using the measured strong-$u$ data for $n_{\max}=6$, 10, and 14 over
+\begin{equation}
+\nu_{\mathrm{LB}}\in\{0,\;10^{-4},\;10^{-3},\;5\times 10^{-3},\;10^{-2},\;2\times 10^{-2},\;5\times 10^{-2}\}.
+\end{equation}
+The result is shown in \cref{fig:lb_tradeoff_ext_u15}.
+Three features are stable across all tested resolutions.
+First, the nonlinear symmetry error drops rapidly once the LB term reaches the few$\times 10^{-2}$ range.
+Second, the linearized symmetry error also drops, but much more slowly.
+Third, the physical anisotropy itself is then being modified at the same time, so improved circularity cannot be interpreted as a purely harmless cleanup.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{lb_tradeoff_extended_u15.pdf}
+    \caption{Extended strong-$u$ tradeoff scan using measured data at $n_{\max}=6$, 10, and 14.
+    Top left: nonlinear final-time axisymmetry error.
+    Top right: linearized final-time axisymmetry error.
+    Bottom row: corresponding final-time anisotropy ratios.
+    The dashed line marks the operating point $\nu_{\mathrm{LB}}=0.02$ adopted in the regularized comparisons.
+    The figure makes two points at once: the nonlinear branch responds much more favorably to weak LB cleanup, and the same LB values that clean the solution also measurably alter the long-time relaxation.}
+    \label{fig:lb_tradeoff_ext_u15}
+\end{figure}
+
+Preliminary higher-resolution checks reinforce the same message.
+At $n_{\max}=14$ and $\nu_{\mathrm{LB}}=0$, the nonlinear final-time error is already reduced to $E_{\mathrm{ang}}(t_{\max})\approx 6.88\times 10^{-2}$ while the linearized error remains $E_{\mathrm{ang}}(t_{\max})\approx 2.37$.
+With $\nu_{\mathrm{LB}}=0.02$, the same $n_{\max}=14$ run drops to $E_{\mathrm{ang}}(t_{\max})\approx 9.11\times 10^{-4}$ for the nonlinear branch but only to $\approx 1.05\times 10^{-1}$ for the linearized branch.
+An additional unregularized check at $n_{\max}=16$ still lowers the nonlinear defect to $\approx 3.25\times 10^{-2}$ while leaving the linearized branch severely contaminated.
+So the broad conclusion is unchanged even when the basis is enlarged further: increasing $n_{\max}$ helps the nonlinear operator in the expected way, but it does not rescue the discrete linearized operator comparably.
+The high-$n_{\max}$ message is therefore sharper than at low resolution.
+The nonlinear branch exhibits what one would want from a convergent spectral calculation: the final transverse defect shrinks from order unity at $n_{\max}=6$ to order $10^{-2}$ by $n_{\max}=16$ in the unregularized case.
+The linearized branch does not show the same asymptotic trend in the same parameter window.
+That discrepancy is one of the most concrete conclusions of this report and should be emphasized in the main paper: in far-from-equilibrium calculations, a linearized collision operator can degrade not only dissipation rates but also the qualitative geometry of the relaxed distribution.
+
+\section{Dependence on stream separation $u$}
+The strong two-stream case $u=1.5$ is not isolated.
+To test how the symmetry conclusions depend on the distance from Maxwellian, we performed an additional scan at
+\begin{equation}
+u\in\{1.2,\;1.5,\;1.8\},
+\end{equation}
+for $n_{\max}=6,10,14$, with and without LB regularization.
+The results are summarized in \cref{fig:u_nmax_summary,tab:u_nmax_summary}.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{u_nmax_summary.pdf}
+    \caption{Final-time dependence on stream separation $u$ and Hermite resolution.
+    Solid lines denote $\nu_{\mathrm{LB}}=0$ and dashed lines denote $\nu_{\mathrm{LB}}=0.02$.
+    Top left: nonlinear final-time axisymmetry error.
+    Top right: linearized final-time axisymmetry error.
+    Bottom row: corresponding final-time anisotropy ratios.
+    Three regimes are visible.
+    At $u=1.2$, both nonlinear and linearized runs remain comparatively well behaved and increasing $n_{\max}$ quickly lowers the nonlinear defect.
+    At $u=1.5$, the nonlinear and linearized branches separate strongly, and LB damping cleans the nonlinear branch much more efficiently than the linearized one.
+    At $u=1.8$, the problem becomes genuinely severe: without LB damping, low-resolution runs are badly contaminated and the nonlinear $n_{\max}=6$ case becomes too distorted for the normalized angular metric to remain meaningful.}
+    \label{fig:u_nmax_summary}
+\end{figure}
+
+\begin{table}[H]
+    \centering
+    \caption{Representative final-time metrics from the $(u,n_{\max})$ scan.
+    The table reports the strongest and most informative contrasts from \cref{fig:u_nmax_summary}.
+    The transition from $u=1.2$ to $u=1.8$ makes clear that the farther the state is pushed from Maxwellian, the more strongly the nonlinear and linearized branches diverge in both symmetry and residual anisotropy.}
+    \label{tab:u_nmax_summary}
+    \begin{tabular}{@{}cccccc@{}}
+    \toprule
+    $u$ & $n_{\max}$ & $\nu_{\mathrm{LB}}$ & $E_{\rm ang}^{\rm nl}(t_{\max})$ & $E_{\rm ang}^{\rm lin}(t_{\max})$ & $|A_{\rm nl}(t_{\max})/A_0|$ \\
+    \midrule
+    1.2 & 14 & 0    & $8.35\times10^{-3}$ & $1.37\times10^{-1}$ & $3.86\times10^{-2}$ \\
+    1.2 & 14 & 0.02 & $1.49\times10^{-4}$ & $2.98\times10^{-3}$ & $1.46\times10^{-2}$ \\
+    1.5 & 14 & 0    & $6.88\times10^{-2}$ & $2.37\times10^{0}$ & $9.48\times10^{-2}$ \\
+    1.5 & 14 & 0.02 & $9.11\times10^{-4}$ & $1.05\times10^{-1}$ & $3.82\times10^{-2}$ \\
+    1.8 & 14 & 0    & $2.47\times10^{-1}$ & $5.56\times10^{0}$ & $2.25\times10^{-1}$ \\
+    1.8 & 14 & 0.02 & $6.92\times10^{-3}$ & $1.40\times10^{0}$ & $8.50\times10^{-2}$ \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+The $u$ scan clarifies the physical interpretation.
+When $u=1.2$, the system is still close enough to Maxwellian that both operators relax to similar low-anisotropy states, although the nonlinear branch is still measurably more axisymmetric at large $n_{\max}$.
+At $u=1.5$, the difference becomes structural: the nonlinear branch can still be regularized into a nearly circular transverse state, whereas the linearized branch retains a much larger forbidden angular component.
+At $u=1.8$, the low-resolution nonlinear dynamics itself becomes under-resolved without additional damping, and the linearized operator becomes qualitatively unreliable even at $n_{\max}=14$.
+This progression is scientifically useful.
+It shows that the main message of the PRL is not merely a numerical curiosity at one chosen parameter value; it strengthens continuously as the state is pushed further from the perturbative regime in which a linearized operator might have been expected to suffice.
+
+\section{Choosing $\nu_{\mathrm{LB}}$ and $\Delta t$}
+Among the cases tested here, the most practical regularized operating point is
+\begin{equation}
+\nu_{\mathrm{LB}}=0.02,\qquad \Delta t=0.10.
+\end{equation}
+This choice is not physically special.
+It is simply the smallest LB value that gives a clearly visible reduction of the nonlinear symmetry defect in the strong two-stream problem while keeping the timestep comfortably inside the explicit SSPRK3 stability region for $n_{\max}\le 10$.
+
+The explicit stability bounds are shown in \cref{fig:lb_stability_u15}.
+The symmetry/physics tradeoff is shown in \cref{fig:lb_tradeoff_u15}.
+The message is direct:
+\begin{itemize}[leftmargin=1.5em]
+    \item very small LB values (\(10^{-4}\) to \(10^{-3}\)) barely change the strong-\(u\) symmetry defect,
+    \item moderate LB values (\(\sim 0.02\)) visibly clean the nonlinear solution,
+    \item large LB values eventually over-damp the physics and, in the present implementation, also drive substantial energy drift.
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.62\linewidth]{lb_stability_scan.pdf}
+    \caption{Explicit SSPRK3 stability limit for the LB term.
+    The bound depends mainly on $\nu_{\mathrm{LB}}$ and $n_{\max}$ because the LB operator is diagonal in Hermite space.
+    The standard choice $\Delta t=0.10$ stays well inside the measured stability window for $n_{\max}\le 10$ and $\nu_{\mathrm{LB}}=0.02$.}
+    \label{fig:lb_stability_u15}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{lb_tradeoff_u15.pdf}
+    \caption{Tradeoff between symmetry cleanup and alteration of the physical relaxation for $u=1.5$.
+    Left: final nonlinear axisymmetry error.
+    Middle: final linearized axisymmetry error.
+    Right: remaining physical anisotropy at the end of the run.
+    The dashed vertical line marks the regularized operating point \(\nu_{\mathrm{LB}}=0.02\).}
+    \label{fig:lb_tradeoff_u15}
+\end{figure}
+
+\begin{table}[H]
+    \centering
+    \caption{Small-\(\nu_{\mathrm{LB}}\) scan for the main one-species/two-species workflow at $n_{\max}=6$, $u=1.5$, and $\Delta t=0.10$.
+    The extra damping grows only gradually for very small $\nu_{\mathrm{LB}}$, while the conservation defect grows steadily.
+    This is why the LB term is best interpreted as optional regularization rather than as part of the physical model.}
+    \label{tab:smallnu_u15}
+    \begin{tabular}{@{}cccc@{}}
+    \toprule
+    $\nu_{\mathrm{LB}}$ & $A(t_{\max})/A_0$ & $\max |\Delta W|/W_0$ (1sp) & $\max |\Delta W_{\rm tot}|/W_0$ (2sp) \\
+    \midrule
+    $10^{-4}$ & $9.760\times10^{-2}$ & $1.737\times10^{-3}$ & $5.991\times10^{-4}$ \\
+    $10^{-3}$ & $9.210\times10^{-2}$ & $1.714\times10^{-2}$ & $5.911\times10^{-3}$ \\
+    $5\times 10^{-3}$ & $7.233\times10^{-2}$ & $8.079\times10^{-2}$ & $2.786\times10^{-2}$ \\
+    $10^{-2}$ & $5.476\times10^{-2}$ & $1.503\times10^{-1}$ & $5.184\times10^{-2}$ \\
+    $2\times 10^{-2}$ & $3.235\times10^{-2}$ & $2.617\times10^{-1}$ & $9.024\times10^{-2}$ \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+This is the practical reason the report recommends two distinct operating modes rather than a single ``best'' configuration.
+For quantitative comparisons, the Landau-only runs remain the right reference because they preserve the invariants and isolate the actual truncation error.
+For long-time visualization, contour plots, or exploratory scans where the dominant concern is suppressing the spurious high-order angular contamination, a weak LB value such as $\nu_{\mathrm{LB}}=0.02$ is defensible provided it is stated explicitly and not interpreted as part of the physical model.
+This operational split is also the correct way to present the method in the manuscript.
+The nonlinear Landau solver is the physical result.
+The LB-augmented solver is a regularized diagnostic tool for estimating how much of the visible long-time structure is due to under-resolved high-order Hermite content.
+
+\section{Conclusions}
+The stronger two-stream case reinforces the main message of the project.
+\begin{enumerate}[leftmargin=1.5em]
+    \item The \textbf{nonlinear Landau operator} remains the correct default.
+    It is much more faithful to the exact axial symmetry of the problem than the discrete linearized operator.
+    \item The \textbf{discrete linearized operator} remains the main source of symmetry loss.
+    This is not a physical feature of linearized Landau theory; it is a consequence of linearizing about a finite projected Maxwellian in a truncated Cartesian Hermite basis.
+    \item The main cure is still \textbf{more Hermite resolution}.
+    Raising \(n_{\max}\) consistently improves the nonlinear solution; changing \(\Delta t\), \(Q\), or \texttt{maxK} has a much smaller effect once the run is stable.
+    \item The LB term in its current form is a \textbf{numerical sponge}, not a conservative collision model.
+    It is useful when cleaner long-time phase-space pictures are needed, but it should be disclosed explicitly and not mistaken for a symmetry-preserving physical closure.
+    \item Within the current implementation, the most practical regularized setting is \(\nu_{\mathrm{LB}}=0.02\) with \(\Delta t=0.10\) for \(n_{\max}\le 10\).
+    That setting is appropriate for exploratory or visualization-oriented runs.
+    For quantitative claims, the safer recommendation is still to keep \(\nu_{\mathrm{LB}}=0\) and increase \(n_{\max}\).
+\end{enumerate}
+
+In short: the strong-$u$ rerun does not weaken the case for the nonlinear Landau operator; it strengthens it.
+The further from Maxwellian the problem is pushed, the more clearly the nonlinear operator, adequate Hermite resolution, and only very cautious regularization separate themselves from the linearized alternative.
+
+\begin{thebibliography}{99}
+\bibitem{lenard1958plasma}
+A.~Lenard and I.~B. Bernstein, \emph{Plasma oscillations with diffusion in velocity space}, Phys. Rev. \textbf{112}, 1456 (1958).
+
+\bibitem{dougherty1964model}
+J.~P. Dougherty, \emph{Model Fokker--Planck equation for a plasma and its solution}, Phys. Fluids \textbf{7}, 1788 (1964).
+
+\bibitem{madsen2013linearized}
+J.~Madsen, \emph{Gyrokinetic linearized Landau collision operator}, Phys. Rev. E \textbf{87}, 011101(R) (2013).
+
+\bibitem{mandell2018laguerre}
+N.~R. Mandell, W.~Dorland, and M.~Landreman, \emph{Laguerre--Hermite pseudo-spectral velocity formulation of gyrokinetics}, J. Plasma Phys. \textbf{84}, 905840108 (2018).
+
+\bibitem{pezzi2017solarwind}
+O.~Pezzi, \emph{Solar wind collisional heating}, J. Plasma Phys. \textbf{83}, 555830301 (2017).
+
+\bibitem{belli2017advanced}
+E.~A. Belli and J.~Candy, \emph{Implications of advanced collision operators for gyrokinetic simulation}, Plasma Phys. Control. Fusion \textbf{59}, 045015 (2017).
+
+\bibitem{li2021hermite}
+R.~Li, Y.~Ren, and Y.~Wang, \emph{Hermite spectral method for Fokker--Planck--Landau equation modeling collisional plasma}, J. Comput. Phys. \textbf{438}, 110235 (2021).
+
+\bibitem{jorge2019collisionality}
+R.~Jorge, P.~Ricci, S.~Brunner, S.~Gamba, V.~Konovets, N.~F. Loureiro, L.~M. Perrone, and N.~Teixeira, \emph{Linear theory of electron-plasma waves at arbitrary collisionality}, J. Plasma Phys. \textbf{85}, 905850604 (2019).
+
+\bibitem{pan2020exact}
+Q.~Pan, D.~R. Ernst, and P.~Crandall, \emph{First implementation of gyrokinetic exact linearized Landau collision operator and comparison with models}, Phys. Plasmas \textbf{27}, 042307 (2020).
+
+\bibitem{hirvijoki2022metriplectic}
+E.~Hirvijoki, J.~W. Burby, and A.~J. Brizard, \emph{Metriplectic foundations of gyrokinetic Vlasov--Maxwell--Landau theory}, Phys. Plasmas \textbf{29}, 060701 (2022).
+
+\bibitem{jeyakumar2024lb}
+S.~Jeyakumar, M.~Kraus, M.~J. Hole, and D.~Pfefferl\'e, \emph{A structure-preserving particle discretisation for the Lenard--Bernstein collision operator}, J. Plasma Phys. \textbf{90}, 905900301 (2024).
+\end{thebibliography}
+
+\end{document}

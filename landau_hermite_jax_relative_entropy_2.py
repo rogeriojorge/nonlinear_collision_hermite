@@ -28,7 +28,7 @@ from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-from landau_hermite_jax_relative_entropy import (
+from landau_hermite_jax_relative_entropy_1 import (
     Species,
     _maybe_import_jax,
     build_ic_fig1_1sp_twostream,
@@ -38,6 +38,8 @@ from landau_hermite_jax_relative_entropy import (
     build_model_tables_np,
     integrate_1sp_numpy,
     invariants_from_tensor,
+    build_lb_collision_jax,
+    lb_collision_np,
     make_linearized_rhs_1sp_jax,
     make_linearized_rhs_1sp_numpy,
     prepare_entropy_grid,
@@ -304,6 +306,7 @@ def compute_twostream_histories(
     steps: int | None,
     u: float,
     linearized: str = "on",
+    nu_LB: float = 1.0,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     sp1 = Species(m=1.0, vth=1.0)
     if steps is None:
@@ -318,14 +321,15 @@ def compute_twostream_histories(
         jax, jnp = _maybe_import_jax("jax")
         assert jax is not None and jnp is not None
         rhs11 = build_jax_functions(T11)
-        integrate_1sp_j, _ = build_integrators_jax(lambda f: rhs11(f, f), lambda a, b: (a, b), "ssprk3")
+        lb_jit = build_lb_collision_jax(nmax, float(nu_LB))
+        integrate_1sp_j, _ = build_integrators_jax(lambda f: rhs11(f, f) + lb_jit(f), lambda a, b: (a, b), "ssprk3")
         integrate_1sp_j = jax.jit(integrate_1sp_j, static_argnums=(2,))
         f_hist = integrate_1sp_j(jnp.asarray(f0), float(dt), nsteps)
         jax.block_until_ready(f_hist)
         f_hist = np.array(f_hist)
     else:
         def rhs1_np(f: np.ndarray) -> np.ndarray:
-            return rhs_ab_np(f, f, T11, use_tt=False, tt_tol=0.0, tt_rmax=1)
+            return rhs_ab_np(f, f, T11, use_tt=False, tt_tol=0.0, tt_rmax=1) + lb_collision_np(f, float(nu_LB))
         f_hist = integrate_1sp_numpy(rhs1_np, f0, float(dt), nsteps, "ssprk3")
 
     f_hist_lin = None
@@ -336,14 +340,14 @@ def compute_twostream_histories(
             jax, jnp = _maybe_import_jax("jax")
             assert jax is not None and jnp is not None
             rhs11 = build_jax_functions(T11)
-            L_apply = make_linearized_rhs_1sp_jax(rhs11, jnp.asarray(fM))
+            L_apply = make_linearized_rhs_1sp_jax(rhs11, jnp.asarray(fM), nu_LB=float(nu_LB))
             integrate_1sp_lin, _ = build_integrators_jax(lambda f: L_apply(f), lambda a, b: (a, b), "ssprk3")
             integrate_1sp_lin = jax.jit(integrate_1sp_lin, static_argnums=(2,))
             df_hist = integrate_1sp_lin(jnp.asarray(f0 - fM), float(dt), nsteps)
             jax.block_until_ready(df_hist)
             f_hist_lin = np.array(df_hist) + fM[None, ...]
         else:
-            L_apply_np = make_linearized_rhs_1sp_numpy(T11, fM, use_tt=False, tt_tol=0.0, tt_rmax=1)
+            L_apply_np = make_linearized_rhs_1sp_numpy(T11, fM, use_tt=False, tt_tol=0.0, tt_rmax=1, nu_LB=float(nu_LB))
             df_hist = integrate_1sp_numpy(L_apply_np, f0 - fM, float(dt), nsteps, "ssprk3")
             f_hist_lin = df_hist + fM[None, ...]
 
@@ -358,13 +362,14 @@ def compute_twostream_histories(
 def main() -> None:
     ap = argparse.ArgumentParser(description="3D velocity-space isosurface panel for Fig1 twostream evolution")
     ap.add_argument("--backend", choices=["jax", "numpy"], default="jax")
-    ap.add_argument("--nmax", type=int, default=6)
+    ap.add_argument("--nmax", type=int, default=12)
     ap.add_argument("--Q", type=int, default=12)
     ap.add_argument("--maxK", type=int, default=256)
     ap.add_argument("--dt", type=float, default=0.15)
     ap.add_argument("--tmax", type=float, default=15.0)
     ap.add_argument("--steps", type=int, default=None)
     ap.add_argument("--u", type=float, default=1.5)
+    ap.add_argument("--nu_LB", type=float, default=0.1)
     ap.add_argument("--grid_xlim", type=float, default=3.0)
     ap.add_argument("--grid_nx", type=int, default=55)
     ap.add_argument("--levels", type=str, default="0.6,0.3,0.1", help="Fractions of f_max(t=0) for isosurfaces")
@@ -374,6 +379,8 @@ def main() -> None:
     ap.add_argument("--view", type=str, default="25,35", help="Camera elev,azim in degrees")
     ap.add_argument("--linearized", choices=["on", "off"], default="on")
     args = ap.parse_args()
+
+    args.nu_LB = max(float(args.nu_LB), 1e-300)/(args.nmax-1)/(args.nmax-2)/(args.nmax-3)  # avoid zero collisionality (no LB damping) which can cause issues at low nmax
 
     configure_plot_style(int(args.dpi))
 
@@ -390,6 +397,7 @@ def main() -> None:
         steps=args.steps,
         u=float(args.u),
         linearized=str(args.linearized),
+        nu_LB=float(args.nu_LB),
     )
     tmax = float(tgrid[-1])
 

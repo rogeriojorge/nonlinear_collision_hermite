@@ -49,12 +49,13 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from matplotlib.ticker import LogFormatterMathtext, LogLocator
 
-from landau_hermite_jax_relative_entropy import (
+from landau_hermite_jax_relative_entropy_1 import (
     Species,
     build_ic_fig1_1sp_twostream,
     build_maxwellian_tensor_from_invariants,
     build_model_tables_np,
     invariants_from_tensor,
+    lb_collision_np,
     make_linearized_rhs_1sp_numpy,
     prepare_entropy_grid,
     rhs_ab_np,
@@ -103,7 +104,7 @@ def _angular_residual_plane(
     return x, plane, residual
 
 
-def _collect_case(nmax: int, *, Q: int, maxK: int, u: float, xlim: float, nx: int, polar_nr: int, polar_nth: int):
+def _collect_case(nmax: int, *, Q: int, maxK: int, u: float, xlim: float, nx: int, polar_nr: int, polar_nth: int, nu_LB: float):
     sp = Species(m=1.0, vth=1.0)
     T11 = build_model_tables_np(nmax=nmax, Q=Q, maxK=maxK, ma=sp.m, mb=sp.m, vtha=sp.vth, vthb=sp.vth, nu_ab=1.0)
     f0 = build_ic_fig1_1sp_twostream(nmax=nmax, sp=sp, u=u, enforce_nonneg=False).f
@@ -112,9 +113,9 @@ def _collect_case(nmax: int, *, Q: int, maxK: int, u: float, xlim: float, nx: in
     fM_basis = _build_basis_maxwellian(nmax=nmax, sp=sp)
     h_match = f0 - fM_match
     h_basis = f0 - fM_basis
-    rhs_nl = rhs_ab_np(f0, f0, T11, use_tt=False, tt_tol=0.0, tt_rmax=1)
-    L_match = make_linearized_rhs_1sp_numpy(T11, fM_match, use_tt=False, tt_tol=0.0, tt_rmax=1)
-    L_basis = make_linearized_rhs_1sp_numpy(T11, fM_basis, use_tt=False, tt_tol=0.0, tt_rmax=1)
+    rhs_nl = rhs_ab_np(f0, f0, T11, use_tt=False, tt_tol=0.0, tt_rmax=1) + lb_collision_np(f0, float(nu_LB))
+    L_match = make_linearized_rhs_1sp_numpy(T11, fM_match, use_tt=False, tt_tol=0.0, tt_rmax=1, nu_LB=float(nu_LB))
+    L_basis = make_linearized_rhs_1sp_numpy(T11, fM_basis, use_tt=False, tt_tol=0.0, tt_rmax=1, nu_LB=float(nu_LB))
     rhs_lin_match = L_match(h_match)
     rhs_lin_basis = L_basis(h_basis)
     polar_grid = prepare_polar_slice_grid(nmax=nmax, rmax=float(xlim), nr=int(polar_nr), nth=int(polar_nth))
@@ -187,6 +188,7 @@ def main() -> None:
     ap.add_argument("--Q", type=int, default=12)
     ap.add_argument("--maxK", type=int, default=256)
     ap.add_argument("--u", type=float, default=1.5)
+    ap.add_argument("--nu_LB", type=float, default=0.1)
     ap.add_argument("--grid_xlim", type=float, default=3.0)
     ap.add_argument("--grid_nx", type=int, default=111)
     ap.add_argument("--polar_nr", type=int, default=64)
@@ -207,6 +209,7 @@ def main() -> None:
         nx=int(args.grid_nx),
         polar_nr=int(args.polar_nr),
         polar_nth=int(args.polar_nth),
+        nu_LB=float(args.nu_LB),
     )
 
     series = {
@@ -216,6 +219,7 @@ def main() -> None:
         "rhs_lin_basis": [],
     }
     for nmax in nmax_list:
+        nu_LB_here = max(float(args.nu_LB), 1e-300)/(int(nmax)-1)/(int(nmax)-2)/(int(nmax)-3)  # avoid zero collisionality (no LB damping) which can cause issues at low nmax
         out = _collect_case(
             int(nmax),
             Q=int(args.Q),
@@ -225,6 +229,7 @@ def main() -> None:
             nx=int(args.grid_nx),
             polar_nr=int(args.polar_nr),
             polar_nth=int(args.polar_nth),
+            nu_LB=nu_LB_here,
         )
         for key in series:
             series[key].append(out["metrics"][key])
@@ -299,7 +304,7 @@ def main() -> None:
     ax3.text(
         0.99,
         0.95,
-        fr"$v_x=0$ slice, $n_{{\max}}^{{\rm map}}={int(args.nmax_repr)}$, $u={float(args.u):.1f},\ Q={int(args.Q)},\ K_{{\max}}={int(args.maxK)}$",
+        fr"$v_x=0$ slice, $n_{{\max}}^{{\rm map}}={int(args.nmax_repr)}$, $u={float(args.u):.1f},\ \nu_{{LB}}={float(args.nu_LB):.2g},\ Q={int(args.Q)},\ K_{{\max}}={int(args.maxK)}$",
         transform=ax3.transAxes,
         ha="right",
         va="top",

@@ -1,0 +1,340 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{microtype}
+\usepackage{hyperref}
+\usepackage[nameinlink,capitalize]{cleveref}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{xcolor}
+
+\graphicspath{{report_figs/}}
+\hypersetup{colorlinks=true, linkcolor=blue!60!black, citecolor=blue!60!black, urlcolor=blue!60!black}
+\sisetup{detect-all=true}
+
+\title{Companion Report:\\Discrete Symmetry Breaking, Nonlinear versus Linearized Landau Dynamics,\\and Lenard--Bernstein Regularization in the Hermite--JAX Solver}
+\author{R. Jorge}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This note accompanies the main PRL manuscript and documents the numerical behavior of the Hermite-based Landau collision solver implemented in
+\texttt{landau\_hermite\_jax\_relative\_entropy.py} together with its companion analysis scripts.
+The emphasis is on three questions: how the nonlinear and linearized discrete collision operators differ, how rotational symmetry is lost in the truncated Cartesian Hermite representation, and what is gained---and lost---by adding a weak Lenard--Bernstein (LB) regularization.
+All five analysis scripts were rerun with and without LB damping, with representative comparisons at $n_{\max}=6$ and $n_{\max}=10$.
+The main conclusion is that the nonlinear Landau operator remains the preferred model for quantitative physics: it is structurally more faithful to the symmetry of the underlying problem, whereas the discrete linearized operator amplifies symmetry defects introduced by the projected Maxwellian background.
+LB damping is useful as a numerical sponge, but the amount needed to visibly clean the long-time angular artifact also produces measurable energy drift, so it should be treated as a controlled regularization rather than as part of the physical model.
+\end{abstract}
+
+\section{Scope and code map}
+The calculations discussed here come from five scripts in the
+\texttt{nonlinear\_collision\_hermite} workspace:
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Label & Purpose \\
+\midrule
+\texttt{S1} &
+Main Fig.~1 workflow: one-species and two-species relaxation, invariants, entropy, linearized overlays \\
+\texttt{S2} &
+3D isosurfaces and $v_x=0$ transverse slices in the $(v_y,v_z)$ plane \\
+\texttt{S3} &
+Angular-symmetry histories versus Hermite resolution \\
+\texttt{S4} &
+Parameter sweeps in $(n_{\max},\Delta t,Q,\texttt{maxK})$ using the same symmetry metric \\
+\texttt{S5} &
+Direct comparison of the discrete background defect and of nonlinear versus linearized RHS symmetry breaking \\
+\bottomrule
+\end{tabular}
+\end{center}
+In filenames, these correspond to
+\texttt{landau\_hermite\_jax\_relative\_entropy.py}
+through
+\texttt{landau\_hermite\_jax\_relative\_entropy\_5.py}.
+
+Throughout, the one-species diagnostic uses the homogeneous two-stream initial condition, which is axisymmetric about the streaming axis $v_x$.
+In the continuum problem, the exact Landau evolution should therefore remain axisymmetric: at any time,
+\begin{equation}
+f(\mathbf v,t)=f(v_x,v_\perp,t), \qquad v_\perp=\sqrt{v_y^2+v_z^2}.
+\end{equation}
+The discrete solver is built in a truncated Cartesian Hermite basis, and that truncation does not preserve continuous rotational symmetry in the transverse $(v_y,v_z)$ plane.
+This report quantifies how large that effect is and how it depends on linearization and on optional LB damping.
+
+\section{Diagnostics and notation}
+The main transverse diagnostic is built from the $v_x=0$ slice
+\begin{equation}
+g(v_y,v_z;t)=f(0,v_y,v_z,t).
+\end{equation}
+At fixed radius $r=\sqrt{v_y^2+v_z^2}$, we define the angular average
+\begin{equation}
+\langle g\rangle_\theta(r,t)
+= \frac{1}{2\pi}\int_0^{2\pi} g(r\cos\theta,r\sin\theta;t)\,d\theta,
+\end{equation}
+and the non-axisymmetric part
+\begin{equation}
+\delta g(v_y,v_z;t)=g(v_y,v_z;t)-\langle g\rangle_\theta(r,t).
+\end{equation}
+The scalar axisymmetry error plotted by Scripts~3--5 is
+\begin{equation}
+E_{\mathrm{ang}}(t)=
+\left[
+\frac{\int (\delta g)^2\,dA}
+{\int \langle g\rangle_\theta^2\,dA}
+\right]^{1/2},
+\label{eq:Eang}
+\end{equation}
+with the integrals approximated on the same polar grid used by the scripts.
+By construction, $E_{\mathrm{ang}}=0$ for a perfectly circular $v_x=0$ slice.
+
+The optional regularization added in this round of tests is a Hermite-diagonal Lenard--Bernstein / linearized-Dougherty term,
+\begin{equation}
+C_{\mathrm{LB}}[f]_{nmp} = -\nu_{\mathrm{LB}}(n+m+p)\,f_{nmp},
+\label{eq:LB}
+\end{equation}
+applied in both nonlinear and linearized evolutions.
+In the present implementation it damps all nonzero Hermite moments, not only the highest ones, so it is explicitly \emph{not} conservative: density is unchanged, but momentum and energy are damped.
+This matters for interpreting any apparent improvement in symmetry.
+
+\section{Why the discrete linearized operator is less symmetry-preserving}
+The continuum linearized Landau operator about an isotropic Maxwellian background,
+\begin{equation}
+L_M[h] = Q(h,M)+Q(M,h),
+\end{equation}
+is rotationally invariant.
+Accordingly, if the perturbation $h_0$ is axisymmetric about $v_x$, then the exact linearized evolution should preserve circular level sets in the $(v_y,v_z)$ plane.
+
+What the discrete Hermite solver does is slightly different.
+The background Maxwellian $M$ used in the linearized run is itself represented in the truncated Cartesian Hermite basis and matched to low-order invariants.
+At finite $n_{\max}$, that projected background is not exactly rotationally invariant.
+The key numerical observation is therefore:
+\begin{quote}
+the symmetry defect enters \emph{at the background level} and is then amplified by the discrete linearized operator.
+\end{quote}
+
+\Cref{fig:symbreak} makes this explicit.
+Panel~(a) shows the non-axisymmetric defect of the matched background itself.
+Panel~(b) shows the defect of the nonlinear discrete RHS $Q(f_0,f_0)$.
+Panel~(c) shows the defect of the linearized discrete RHS $L_M(h_0)$.
+The bottom panel compares the scalar metric~\eqref{eq:Eang} versus $n_{\max}$.
+Two points are immediate.
+First, the linearized discrete RHS has the largest symmetry error.
+Second, replacing the matched projected background by the basis Maxwellian reduces the defect substantially, which identifies the finite-basis background representation---not JAX autodifferentiation and not the continuum linearization itself---as the main culprit.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.98\linewidth]{sweep5_nu0.pdf}
+    \caption{Discrete symmetry breaking of the linearized operator without LB regularization.
+    Top row: non-axisymmetric defect maps for the matched projected background $M$, the nonlinear discrete RHS $Q(f_0,f_0)$, and the linearized discrete RHS $L_M(h_0)=Q(h_0,M)+Q(M,h_0)$.
+    Bottom: axisymmetry error $E_{\rm ang}$ versus $n_{\max}$.
+    The control curve labeled ``basis $M$'' uses the exact basis Maxwellian instead of the matched projected background and reduces the error substantially.
+    This isolates the projected background as the main source of discrete linearized symmetry breaking.}
+    \label{fig:symbreak}
+\end{figure}
+
+The practical implication is straightforward.
+Even when the linearized operator retains the correct qualitative relaxation and remains computationally convenient, it is less faithful to the symmetry of the exact problem in the present truncated Cartesian representation.
+This is an additional numerical reason---beyond formal accuracy---to prefer the nonlinear Landau operator when far-from-equilibrium structure and symmetry are central to the physics.
+
+\section{Representative runs at $n_{\max}=6$ and $10$}
+All five scripts were rerun with $\nu_{\mathrm{LB}}=0$ and with a mild test value $\nu_{\mathrm{LB}}=0.02$.
+For the sweep scripts, the same reduced resolution lists were used but the endpoints of interest were $n_{\max}=6$ and $10$.
+
+\subsection{Main Fig.~1 workflow}
+\Cref{fig:fig1compare} shows the full main-figure output for $n_{\max}=6$ and $10$, with and without LB damping.
+The effect of $\nu_{\mathrm{LB}}=0.02$ is immediate: both the one-species anisotropy and the two-species temperature difference relax faster, as expected from the extra diagonal damping.
+However, that extra damping is not free.
+Because~\eqref{eq:LB} also damps the low Hermite moments, the energy invariant is no longer preserved.
+This is quantified in \cref{tab:fig1compare}.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{0.48\linewidth}
+        \includegraphics[width=\linewidth]{Fig1_n6_nu0.pdf}
+        \caption{$n_{\max}=6$, $\nu_{\mathrm{LB}}=0$}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.48\linewidth}
+        \includegraphics[width=\linewidth]{Fig1_n6_nu002.pdf}
+        \caption{$n_{\max}=6$, $\nu_{\mathrm{LB}}=0.02$}
+    \end{subfigure}
+
+    \medskip
+
+    \begin{subfigure}{0.48\linewidth}
+        \includegraphics[width=\linewidth]{Fig1_n10_nu0.pdf}
+        \caption{$n_{\max}=10$, $\nu_{\mathrm{LB}}=0$}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.48\linewidth}
+        \includegraphics[width=\linewidth]{Fig1_n10_nu002.pdf}
+        \caption{$n_{\max}=10$, $\nu_{\mathrm{LB}}=0.02$}
+    \end{subfigure}
+    \caption{Main Fig.~1 workflow rerun with and without LB regularization.
+    The LB term accelerates both one-species and two-species relaxation, but this comes with a measurable loss of conservation because the present implementation damps all nonzero Hermite modes.}
+    \label{fig:fig1compare}
+\end{figure}
+
+\begin{table}[H]
+    \centering
+    \caption{End-of-run diagnostics from the main Fig.~1 workflow.
+    Here $A(t_{\max})/A_0$ is the one-species anisotropy ratio and $\max|\Delta W|/W_0$ is the maximum relative energy drift reported by the script over the full run.
+    The LB term produces the desired extra damping, but at $\nu_{\mathrm{LB}}=0.02$ the energy drift is already at the percent level.}
+    \label{tab:fig1compare}
+    \begin{tabular}{@{}ccccc@{}}
+    \toprule
+    $n_{\max}$ & $\nu_{\mathrm{LB}}$ & $A(t_{\max})/A_0$ & $\max|\Delta W|/W_0$ (1sp) & $\max|\Delta W_{\rm tot}|/W_0$ (2sp) \\
+    \midrule
+    6  & 0     & $3.496\times10^{-3}$ & $4.441\times10^{-15}$ & $3.079\times10^{-15}$ \\
+    6  & 0.02  & $1.360\times10^{-3}$ & $6.444\times10^{-2}$ & $9.024\times10^{-2}$ \\
+    10 & 0     & $3.477\times10^{-3}$ & $1.649\times10^{-15}$ & $3.197\times10^{-15}$ \\
+    10 & 0.02  & $1.354\times10^{-3}$ & $6.446\times10^{-2}$ & $9.024\times10^{-2}$ \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Transverse slices and symmetry histories}
+\Cref{fig:yzslices} shows the $v_x=0$ slices for $n_{\max}=6$ with and without LB regularization.
+The exact solution should have circular contours in the $(v_y,v_z)$ plane.
+The plots remain visually close to circular because the color scale is dominated by the leading radial structure, but the symmetry metric~\eqref{eq:Eang} resolves the small angular contamination.
+That time history is shown in \cref{fig:histories}.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{0.48\linewidth}
+        \includegraphics[width=\linewidth]{panel3d_n6_nu0_yzslice.pdf}
+        \caption{$n_{\max}=6$, $\nu_{\mathrm{LB}}=0$}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.48\linewidth}
+        \includegraphics[width=\linewidth]{panel3d_n6_nu002_yzslice.pdf}
+        \caption{$n_{\max}=6$, $\nu_{\mathrm{LB}}=0.02$}
+    \end{subfigure}
+    \caption{$v_x=0$ transverse slices from Script~2.
+    The circular contours correspond to fixed values of $f/f_{\max}(t)$.
+    The exact solution should preserve circularity in the $(v_y,v_z)$ plane; the small fourfold distortion visible at long times is a truncation artifact of the Cartesian Hermite representation.}
+    \label{fig:yzslices}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}{0.48\linewidth}
+        \includegraphics[width=\linewidth]{sweep3_nu0.pdf}
+        \caption{$\nu_{\mathrm{LB}}=0$}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.48\linewidth}
+        \includegraphics[width=\linewidth]{sweep3_nu002.pdf}
+        \caption{$\nu_{\mathrm{LB}}=0.02$}
+    \end{subfigure}
+    \caption{Axisymmetry error histories from Script~3.
+    Without LB regularization, increasing $n_{\max}$ reduces the nonlinear symmetry error but does not remove the discrete linearized defect.
+    Adding $\nu_{\mathrm{LB}}=0.02$ lowers the curves further, but this should be interpreted as numerical damping rather than as improved physical fidelity.}
+    \label{fig:histories}
+\end{figure}
+
+Script~4 was rerun as well and confirms a point already visible in the previous analysis:
+once the timestep is stable, changing $\Delta t$, $Q$, or \texttt{maxK} is a much weaker lever than changing $n_{\max}$.
+In other words, the dominant source of the late-time transverse symmetry defect is Hermite truncation, not SOE quadrature accuracy and not timestep error.
+
+\section{What the LB term buys, and what it costs}
+The motivation for adding~\eqref{eq:LB} was pragmatic: high-order Hermite content generated by the truncated Landau operator can seed non-axisymmetric contamination at long times, and a weak diagonal damping is an obvious way to suppress that tail.
+The numerical scans show that this works, but only with a clear tradeoff.
+
+\subsection{Explicit stability restriction}
+Because the current time stepping is explicit SSPRK3, the LB term imposes an extra timestep restriction.
+Empirically, the largest practical stable timestep obeys
+\begin{equation}
+\Delta t_{\max}\,\nu_{\mathrm{LB}}\,(3n_{\max}) \approx 2.3\text{--}2.4,
+\end{equation}
+which is consistent with the negative-real-axis stability interval of SSPRK3 for the diagonal damping operator.
+\Cref{fig:lbstability} summarizes the measured limits.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.62\linewidth]{lb_stability_scan.pdf}
+    \caption{Largest practical stable timestep for the explicit SSPRK3 evolution with LB regularization.
+    The admissible timestep decreases with both $\nu_{\mathrm{LB}}$ and $n_{\max}$, so any moderate or strong LB damping quickly becomes costly at larger resolution.}
+    \label{fig:lbstability}
+\end{figure}
+
+\begin{table}[H]
+    \centering
+    \caption{Empirical explicit stability limits for the LB term.}
+    \label{tab:stability}
+    \begin{tabular}{@{}ccc@{}}
+    \toprule
+    $\nu_{\mathrm{LB}}$ & $n_{\max}$ & largest practical stable $\Delta t$ \\
+    \midrule
+    0.5 & 6  & $\approx 0.22$ \\
+    0.5 & 10 & $\approx 0.13$ \\
+    1.0 & 6  & $\approx 0.132$ \\
+    1.0 & 10 & $\approx 0.078$ \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Tradeoff between symmetry cleanup and physical distortion}
+\Cref{fig:lbtradeoff} condenses the exploratory LB scan.
+On the left, the final axisymmetry error $E_{\mathrm{ang}}(t_{\max})$ drops rapidly as $\nu_{\mathrm{LB}}$ increases.
+On the right, the physical anisotropy $A(t_{\max})/A_0$ is damped just as rapidly.
+This is the central tradeoff:
+\begin{quote}
+the LB term that removes the angular artifact is the same term that modifies the physical relaxation.
+\end{quote}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{lb_tradeoff_scan.pdf}
+    \caption{Tradeoff between symmetry cleanup and distortion of the physical relaxation.
+    The vertical dashed line marks $\nu_{\mathrm{LB}}=0.02$.
+    Larger LB collisionality efficiently suppresses the long-time angular artifact, but it also accelerates the physical decay and, because the current implementation is nonconservative, produces energy drift in the full runs.}
+    \label{fig:lbtradeoff}
+\end{figure}
+
+For the present implementation, there is therefore no single ``best'' LB parameter in an absolute sense.
+Instead there are two distinct operating regimes:
+\begin{itemize}[leftmargin=1.5em]
+    \item \textbf{Quantitative physics runs:} use $\nu_{\mathrm{LB}}=0$ whenever possible.
+    If a small numerical sponge is still desired, keep it at most in the \(\nu_{\mathrm{LB}}\sim 10^{-4}\) to \(10^{-3}\) range; this keeps the energy drift at the sub-percent level over the long runs tested here, but it only weakly changes the symmetry artifact.
+    \item \textbf{Qualitative cleanup / exploratory runs:} values around \(\nu_{\mathrm{LB}}=0.02\) visibly damp the spurious high-mode contamination and remain stable with \(\Delta t=0.10\) for \(n_{\max}\le 10\), but they already alter the physical decay enough that they should not be used as the default production setting for manuscript-quality physics claims.
+\end{itemize}
+
+\begin{table}[H]
+    \centering
+    \caption{Illustrative $n_{\max}=6$ long-run tradeoff in the main Fig.~1 workflow.
+    The extra damping from LB grows only gradually for very small \(\nu_{\mathrm{LB}}\), while the total two-species energy drift grows roughly linearly.
+    This is why only very small values can be justified in quantitative runs.}
+    \label{tab:smallnu}
+    \begin{tabular}{@{}ccc@{}}
+    \toprule
+    $\nu_{\mathrm{LB}}$ & $A(t_{\max})/A_0$ & $\max|\Delta W_{\rm tot}|/W_0$ \\
+    \midrule
+    $10^{-4}$ & $3.480\times 10^{-3}$ & $5.991\times 10^{-4}$ \\
+    $10^{-3}$ & $3.334\times 10^{-3}$ & $5.911\times 10^{-3}$ \\
+    $5\times 10^{-3}$ & $2.756\times 10^{-3}$ & $2.786\times 10^{-2}$ \\
+    $10^{-2}$ & $2.175\times 10^{-3}$ & $5.184\times 10^{-2}$ \\
+    $2\times 10^{-2}$ & $1.360\times 10^{-3}$ & $9.024\times 10^{-2}$ \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+\section{Conclusions}
+The combined picture from Scripts~1--5 is consistent and internally coherent.
+
+\begin{enumerate}[leftmargin=1.5em]
+    \item In the present truncated Cartesian Hermite representation, the \textbf{nonlinear} discrete Landau operator is more symmetry-faithful than the \textbf{linearized} one.
+    The discrete linearized operator inherits and amplifies the non-axisymmetric defect of the matched projected Maxwellian background.
+    \item The main remedy for the spurious long-time angular contamination is still \textbf{increasing $n_{\max}$}, not retuning \(Q\), \texttt{maxK}, or \(\Delta t\).
+    \item Adding a Lenard--Bernstein term is numerically effective as a \textbf{regularization}, but in the present diagonal form it is not conservative.
+    Therefore any claimed improvement must always be read together with the induced drift in the low-order invariants.
+    \item For \textbf{quantitative} conclusions, the preferred path remains: use the nonlinear Landau operator, raise \(n_{\max}\), and reserve LB damping for very mild stabilization only.
+    \item For \textbf{qualitative} or pilot calculations, a small LB term may be useful to suppress high-order Hermite noise and to make long-time plots cleaner, but this should be disclosed explicitly as numerical regularization.
+\end{enumerate}
+
+Taken together, these results strengthen rather than weaken the case for the nonlinear Landau operator.
+The nonlinear solver not only carries the correct physics of far-from-equilibrium relaxation, it also better respects the geometric structure of the problem in the discrete Hermite setting.
+The LB term is best viewed as an optional numerical sponge; it can help, but it should not be mistaken for a symmetry-restoring substitute for adequate resolution.
+
+\end{document}
