@@ -188,7 +188,7 @@ def main() -> None:
     ap.add_argument("--Q", type=int, default=12)
     ap.add_argument("--maxK", type=int, default=256)
     ap.add_argument("--u", type=float, default=1.5)
-    ap.add_argument("--nu_LB", type=float, default=0.1)
+    ap.add_argument("--nu_LB", type=float, default=0.10)
     ap.add_argument("--grid_xlim", type=float, default=3.0)
     ap.add_argument("--grid_nx", type=int, default=111)
     ap.add_argument("--polar_nr", type=int, default=64)
@@ -327,10 +327,11 @@ def main() -> None:
             bbox=dict(facecolor="white", edgecolor="none", alpha=0.75, boxstyle="round,pad=0.12"),
         )
 
-    fig.savefig(f"{args.outprefix}.png", dpi=int(args.dpi), bbox_inches="tight")
+    # fig.savefig(f"{args.outprefix}.png", dpi=int(args.dpi), bbox_inches="tight")
     fig.savefig(f"{args.outprefix}.pdf", bbox_inches="tight")
     plt.close(fig)
-    print(f"[ok] wrote: {args.outprefix}.png and {args.outprefix}.pdf")
+    # print(f"[ok] wrote: {args.outprefix}.png and {args.outprefix}.pdf")
+    print(f"[ok] wrote: {args.outprefix}.pdf")
 
 
 if __name__ == "__main__":

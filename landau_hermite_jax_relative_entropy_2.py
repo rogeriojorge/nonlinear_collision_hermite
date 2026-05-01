@@ -226,7 +226,7 @@ def _plot_yz_slice_panel(
     fig.legend(handles=contour_handles, loc="upper center", bbox_to_anchor=(0.5, 0.97), ncol=len(contour_handles), frameon=False)
     cbar = fig.colorbar(image_artist, ax=axes.ravel().tolist(), fraction=0.024, pad=0.02)
     cbar.set_label(r"$f(v_x=0,v_y,v_z)/f_{\max}(t)$")
-    fig.savefig(f"{outprefix}_yzslice.png", dpi=dpi, bbox_inches="tight")
+    # fig.savefig(f"{outprefix}_yzslice.png", dpi=dpi, bbox_inches="tight")
     fig.savefig(f"{outprefix}_yzslice.pdf", bbox_inches="tight")
     plt.close(fig)
 
@@ -369,7 +369,7 @@ def main() -> None:
     ap.add_argument("--tmax", type=float, default=15.0)
     ap.add_argument("--steps", type=int, default=None)
     ap.add_argument("--u", type=float, default=1.5)
-    ap.add_argument("--nu_LB", type=float, default=0.1)
+    ap.add_argument("--nu_LB", type=float, default=0.10)
     ap.add_argument("--grid_xlim", type=float, default=3.0)
     ap.add_argument("--grid_nx", type=int, default=55)
     ap.add_argument("--levels", type=str, default="0.6,0.3,0.1", help="Fractions of f_max(t=0) for isosurfaces")
@@ -419,7 +419,7 @@ def main() -> None:
     level_fracs = _parse_float_list(str(args.levels))
 
     # Colors and alphas (outer surfaces lighter).
-    colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
+    colors = ["#1f77b4", "#ff7f0e", "#1d601d", "#d62728"]
     alphas = [0.6, 0.35, 0.15, 0.05]
 
     ncols = len(idxs)
@@ -468,10 +468,11 @@ def main() -> None:
     fig.subplots_adjust(left=0.035, right=0.995, top=top, bottom=bottom, wspace=0.08, hspace=hspace)
     fig.legend(handles=patches, loc="upper center", bbox_to_anchor=(0.5, 0.965), ncol=len(level_fracs), frameon=False)
 
-    outprefix = str(args.outprefix)
-    fig.savefig(f"{outprefix}.png", dpi=int(args.dpi), bbox_inches="tight")
+    outprefix = str(args.outprefix)+f"_nulb{args.nu_LB:.1e}_nmax{args.nmax}"
+    # fig.savefig(f"{outprefix}.png", dpi=int(args.dpi), bbox_inches="tight")
     fig.savefig(f"{outprefix}.pdf", bbox_inches="tight")
-    print(f"[ok] wrote: {outprefix}.png and {outprefix}.pdf")
+    # print(f"[ok] wrote: {outprefix}.png and {outprefix}.pdf")
+    print(f"[ok] wrote: {outprefix}.pdf")
 
     _plot_yz_slice_panel(
         outprefix=outprefix,
@@ -486,7 +487,8 @@ def main() -> None:
         xlim=float(args.grid_xlim),
         dpi=int(args.dpi),
     )
-    print(f"[ok] wrote: {outprefix}_yzslice.png and {outprefix}_yzslice.pdf")
+    # print(f"[ok] wrote: {outprefix}_yzslice.png and {outprefix}_yzslice.pdf")
+    print(f"[ok] wrote: {outprefix}_yzslice.pdf")
 
     if not _HAVE_SKIMAGE:
         print("[note] skimage not available; used scatter fallback for isosurfaces.")

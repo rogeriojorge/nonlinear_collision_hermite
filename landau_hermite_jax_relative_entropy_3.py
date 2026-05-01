@@ -83,7 +83,7 @@ def main() -> None:
     ap.add_argument("--tmax", type=float, default=20.0)
     ap.add_argument("--steps", type=int, default=None)
     ap.add_argument("--u", type=float, default=1.5)
-    ap.add_argument("--nu_LB", type=float, default=0.1)
+    ap.add_argument("--nu_LB", type=float, default=0.10)
     ap.add_argument("--grid_xlim", type=float, default=3.0)
     ap.add_argument("--polar_nr", type=int, default=64)
     ap.add_argument("--polar_nth", type=int, default=128)
@@ -178,11 +178,12 @@ def main() -> None:
 
     fig.subplots_adjust(left=0.15, right=0.98, top=0.90, bottom=0.14, hspace=0.26)
 
-    outprefix = str(args.outprefix)
-    fig.savefig(f"{outprefix}.png", dpi=int(args.dpi), bbox_inches="tight")
+    outprefix = str(args.outprefix)+f"_nulb{args.nu_LB}_nmax{max(nmax_list)}"
+    # fig.savefig(f"{outprefix}.png", dpi=int(args.dpi), bbox_inches="tight")
     fig.savefig(f"{outprefix}.pdf", bbox_inches="tight")
     plt.close(fig)
-    print(f"[ok] wrote: {outprefix}.png and {outprefix}.pdf")
+    # print(f"[ok] wrote: {outprefix}.png and {outprefix}.pdf")
+    print(f"[ok] wrote: {outprefix}.pdf")
 
 
 if __name__ == "__main__":

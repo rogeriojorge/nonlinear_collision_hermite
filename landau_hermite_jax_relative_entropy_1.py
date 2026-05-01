@@ -2634,7 +2634,7 @@ def make_fig1_panel(
     axd.legend(frameon=False, loc="upper left", borderpad=0.2, labelspacing=0.16, handlelength=1.7)
 
     base = outprefix
-    fig.savefig(base + ".png", dpi=450, bbox_inches="tight")
+    # fig.savefig(base + ".png", dpi=450, bbox_inches="tight")
     fig.savefig(base + ".pdf", bbox_inches="tight")
     plt.close(fig)
 
@@ -3359,7 +3359,8 @@ def run_tests(args) -> None:
             # artificially small and is not a meaningful Galilean-invariance diagnostic. Plot nmax>=2 only.
             m_plot = drift_nmax >= 2
             ax.plot(drift_nmax[m_plot], drift_res[m_plot], marker="o")
-            fig.savefig(out_dir / "drifted_maxwellian_convergence.png", dpi=220, bbox_inches="tight")
+            # fig.savefig(out_dir / "drifted_maxwellian_convergence.png", dpi=220, bbox_inches="tight")
+            fig.savefig(out_dir / "drifted_maxwellian_convergence.pdf", bbox_inches="tight")
             plt.close(fig)
 
             # Plot symmetry + dissipation on separate axes to avoid symlog ambiguity with mixed signs.
@@ -3383,7 +3384,8 @@ def run_tests(args) -> None:
             ax1.set_yscale("log")
             ax1.grid(True, which="both", alpha=0.3)
             ax1.bar([r"$-\langle h_1, Lh_1 \rangle_M$", r"$-\langle h_2, Lh_2 \rangle_M$"], [max(diss_mag1, 1e-300), max(diss_mag2, 1e-300)])
-            fig.savefig(out_dir / "linearized_symmetry_dissipation.png", dpi=220, bbox_inches="tight")
+            # fig.savefig(out_dir / "linearized_symmetry_dissipation.png", dpi=220, bbox_inches="tight")
+            fig.savefig(out_dir / "linearized_symmetry_dissipation.pdf", bbox_inches="tight")
             plt.close(fig)
 
             fig = plt.figure(figsize=(6.2, 2.8), dpi=180)
@@ -3393,7 +3395,8 @@ def run_tests(args) -> None:
             ax.set_yscale("log")
             ax.grid(True, which="both", alpha=0.3)
             ax.bar(["ab", "ba"], [rab, rba])
-            fig.savefig(out_dir / "cross_equilibrium_residuals.png", dpi=220, bbox_inches="tight")
+            # fig.savefig(out_dir / "cross_equilibrium_residuals.png", dpi=220, bbox_inches="tight")
+            fig.savefig(out_dir / "cross_equilibrium_residuals.pdf", bbox_inches="tight")
             plt.close(fig)
 
             print(f"[tests] drift convergence (u={u_drift}): {list(zip(drift_nmax.tolist(), drift_res.tolist()))}", flush=True)
@@ -3459,7 +3462,8 @@ def run_tests(args) -> None:
                 ax.plot(xs, ys1, marker="^", ls="--", label=f"self (Q={Q0})")
                 ax.plot(xs, ys2, marker="v", ls="--", label=f"cross (Q={Q0})")
             ax.legend(frameon=False, loc="best")
-            fig.savefig(out_dir / "convergence_maxwellian_residual.png", dpi=220, bbox_inches="tight")
+            # fig.savefig(out_dir / "convergence_maxwellian_residual.png", dpi=220, bbox_inches="tight")
+            fig.savefig(out_dir / "convergence_maxwellian_residual.pdf", bbox_inches="tight")
             plt.close(fig)
         except Exception:
             pass
@@ -3513,7 +3517,8 @@ def run_tests(args) -> None:
     import matplotlib.pyplot as plt
 
     def _save(fig, name: str):
-        fig.savefig(out_dir / f"{name}.png", dpi=220, bbox_inches="tight")
+        # fig.savefig(out_dir / f"{name}.png", dpi=220, bbox_inches="tight")
+        fig.savefig(out_dir / f"{name}.pdf", bbox_inches="tight")
         plt.close(fig)
 
     nvals = np.array([r["nmax"] for r in rows], dtype=int)
@@ -3791,7 +3796,7 @@ def main() -> None:
     ap.add_argument("--use_tt", action="store_true", help="Use optional TT/MPO contraction in NumPy backend (debug/scaling).")
     ap.add_argument("--tt_tol", type=float, default=1e-12)
     ap.add_argument("--tt_rmax", type=int, default=32)
-    ap.add_argument("--nu_LB", type=float, default=0.1, help="Lenard-Bernstein / linearized Dougherty collisionality used to damp Hermite moments diagonally.")
+    ap.add_argument("--nu_LB", type=float, default=0.10, help="Lenard-Bernstein / linearized Dougherty collisionality used to damp Hermite moments diagonally.")
     ap.add_argument("--dt_1sp", type=float, default=0.15)
     ap.add_argument("--dt_2sp", type=float, default=0.15)
     ap.add_argument("--tmax_1sp", type=float, default=15.0)
@@ -4417,9 +4422,10 @@ def main() -> None:
             D2tot_ratio_lin=D2tot_ratio_lin,
             nmax=nmax,
         )
-        print(f"[ok] wrote: {outprefix}.png and {outprefix}.pdf", flush=True)
+        # print(f"[ok] wrote: {outprefix}.png and {outprefix}.pdf", flush=True)
+        print(f"[ok] wrote: {outprefix}.pdf", flush=True)
 
-    run_case(outprefix=str(args.outprefix_fig1), tag="Fig1", f0_case=f0_1sp, fa0_case=fa0, fb0_case=fb0, do_bench=True)
+    run_case(outprefix=str(args.outprefix_fig1)+f"_nulb{args.nu_LB:.1e}_nmax{args.nmax}", tag="Fig1", f0_case=f0_1sp, fa0_case=fa0, fb0_case=fb0, do_bench=True)
 
 
 if __name__ == "__main__":
