@@ -20,6 +20,7 @@ python landau_hermite_prl_benchmark.py \
 ```
 
 Outputs:
+- `Fig1_PRL_tensor_barrier_onecol.pdf` and `Fig1_PRL_tensor_barrier_onecol.png`
 - `Fig1_PRL_tensor_barrier.pdf` and `Fig1_PRL_tensor_barrier.png`
 - `prl_benchmark_reviewproof.csv`
 - `prl_benchmark_reviewproof.json`

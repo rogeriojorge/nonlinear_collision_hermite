@@ -77,6 +77,13 @@ def _format_bytes_md(num: float) -> str:
     return tex.replace(r"\,", " ").replace(r"\mathrm{", "").replace("}", "")
 
 
+def _pick_dense_build(rows: list[dict[str, str]]) -> dict[str, str] | None:
+    ok_rows = [r for r in rows if str(r.get("status", "")).startswith("ok") and math.isfinite(_f(r, "dense_build_time_s"))]
+    if not ok_rows:
+        return None
+    return sorted(ok_rows, key=lambda r: _i(r, "p"))[-1]
+
+
 def _pick_benchmark(rows: list[dict[str, str]], bench_p: int | None = None) -> dict[str, str]:
     if not rows:
         raise SystemExit("No benchmark rows found")
@@ -128,6 +135,7 @@ def main() -> None:
     angular_meta = _read_json(Path(args.angular_json))
 
     brow = _pick_benchmark(bench_rows, args.bench_p)
+    dense_build_row = _pick_dense_build(dense_apply_rows)
     dense_nmax, dense_err = _pick_dense(dense_rows, bench_meta)
     arow = _pick_angular(angular_rows)
 
@@ -139,6 +147,13 @@ def main() -> None:
     if not math.isfinite(collision_eval_time):
         collision_eval_time = _f(brow, "rhs_total_time_s")
     dense_apply_budget = float(bench_meta.get("dense_apply", {}).get("time_budget_s", bench_meta.get("args", {}).get("dense_apply_time_budget", math.nan))) if bench_meta else math.nan
+    dense_build_p = _i(dense_build_row or {}, "p")
+    dense_build_nmax = _i(dense_build_row or {}, "nmax")
+    dense_build_time = _f(dense_build_row or {}, "dense_build_time_s")
+    dense_build_memory = _f(dense_build_row or {}, "dense_tensor_bytes")
+    dense_apply_ms = 1e3 * _f(dense_build_row or {}, "dense_apply_time_s")
+    dense_build_bench_row = next((r for r in bench_rows if _i(r, "p") == dense_build_p), {})
+    onecenter_table_build_time = _f(dense_build_bench_row, "table_build_time_s")
     max_soe = max((_f(r, "soe_err_rel") for r in bench_rows), default=math.nan)
     q_default = int(float(bench_meta.get("args", {}).get("Q", 12))) if bench_meta else 12
     q_ref = max((_i(r, "Q") for r in q_rows), default=0)
@@ -167,6 +182,12 @@ def main() -> None:
         rf"\newcommand{{\MedianRhsTimeAtBenchP}}{{{_format_float(collision_eval_time, 3)}\,\mathrm{{s}}}}",
         rf"\newcommand{{\CollisionEvalTimeAtBenchP}}{{{_format_float(collision_eval_time, 3)}\,\mathrm{{s}}}}",
         rf"\newcommand{{\DenseApplyTimeBudget}}{{{_format_float(dense_apply_budget, 3)}\,\mathrm{{s}}}}",
+        rf"\newcommand{{\DenseBuildP}}{{{dense_build_p}}}",
+        rf"\newcommand{{\DenseBuildNmax}}{{{dense_build_nmax}}}",
+        rf"\newcommand{{\DenseBuildTime}}{{{dense_build_time:.1f}\,\mathrm{{s}}}}",
+        rf"\newcommand{{\DenseBuildMemory}}{{{_format_bytes_tex(dense_build_memory)}}}",
+        rf"\newcommand{{\DenseApplyTimeAtDenseBuildP}}{{{_format_float(dense_apply_ms, 3)}\,\mathrm{{ms}}}}",
+        rf"\newcommand{{\OneCenterTableBuildTimeAtDenseBuildP}}{{{_format_sci_tex(onecenter_table_build_time, sig=2)}\,\mathrm{{s}}}}",
         rf"\newcommand{{\DenseValidationNmax}}{{{dense_nmax}}}",
         rf"\newcommand{{\DenseValidationError}}{{{_format_sci_tex(dense_err)}}}",
         rf"\newcommand{{\MaxSOEQuadratureError}}{{{_format_sci_tex(max_soe)}}}",
@@ -201,6 +222,8 @@ At `p={_i(brow, 'p')}` (`nmax={_i(brow, 'nmax')}`, `N={_i(brow, 'N')}`), direct 
 ## Timing
 
 At `p={_i(brow, 'p')}`, the measured median tensorized collision-update time is `{collision_eval_time:.3e} s` using the single-thread environment recorded in `{args.benchmark_json}`. This is a measured tensorized timing, not a claim of dense high-`p` runtime speedup.
+
+At `p={dense_build_p}` (`nmax={dense_build_nmax}`), explicit dense tensor assembly took `{dense_build_time:.3e} s` and the stored dense tensor used `{_format_bytes_md(dense_build_memory)}`. The already-assembled dense tensor contraction took `{dense_apply_ms:.3e} ms`; the one-center/SOE table build at the same `p` took `{onecenter_table_build_time:.3e} s`.
 
 ## Explicit dense-assembly validation
 

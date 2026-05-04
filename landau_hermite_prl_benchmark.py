@@ -339,7 +339,7 @@ def _plot(rows: list[dict[str, Any]], dense_rows: list[dict[str, Any]], dense_ap
     ax.annotate(
         f"dense tensor: {_format_bytes(pick['dense_tensor_bytes'])}",
         xy=(pick["p"], pick["dense_tensor_bytes"] / gib),
-        xytext=(10.2, 84.0),
+        xytext=(10.2, 88.0),
         textcoords="data",
         arrowprops=dict(arrowstyle="->", lw=0.8, color="0.25"),
         fontsize=6.7,
@@ -400,9 +400,88 @@ def _plot(rows: list[dict[str, Any]], dense_rows: list[dict[str, Any]], dense_ap
     fig.savefig(f"{outprefix}.png", dpi=int(dpi), bbox_inches="tight")
 
 
+def _plot_onecol(rows: list[dict[str, Any]], q_rows: list[dict[str, Any]], outprefix: str, dpi: int) -> None:
+    plt.rcParams.update(
+        {
+            "font.size": 7.2,
+            "axes.labelsize": 7.4,
+            "legend.fontsize": 6.2,
+            "xtick.labelsize": 6.6,
+            "ytick.labelsize": 6.6,
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
+        }
+    )
+    colors = plt.get_cmap("tab10").colors
+    p = np.array([r["p"] for r in rows], dtype=float)
+    gib = 1024.0**3
+    fig, axs = plt.subplots(1, 2, figsize=(5.6, 2.1), constrained_layout=True)
+
+    ax = axs[0]
+    ax.plot(p, np.array([r["dense_tensor_bytes"] for r in rows]) / gib, "o-", ms=4.0, lw=1.35, color=colors[0], label=r"dense $8p^9$ tensor")
+    ax.plot(p, np.array([r["model_tables_bytes"] for r in rows]) / gib, "s-", ms=3.8, lw=1.25, color=colors[1], label="basis/Coulomb tables")
+    ax.plot(p, np.array([r["working_set_bytes"] for r in rows]) / gib, "^-", ms=4.0, lw=1.25, color=colors[2], label="tables + temporaries")
+    ax.set_yscale("log")
+    ax.set_xlabel(r"$p=n_{\max}+1$")
+    ax.set_ylabel("array storage (GiB)")
+    ax.grid(True, alpha=0.22)
+    ax.text(-0.14, 1.02, "(a)", transform=ax.transAxes, weight="bold", va="top")
+    ax.legend(loc="upper left", frameon=False, handlelength=1.5, borderaxespad=0.25)
+    pick = sorted(rows, key=lambda r: int(r["p"]))[-1]
+    ax.annotate(
+        f"dense tensor: {_format_bytes(pick['dense_tensor_bytes'])}",
+        xy=(pick["p"], pick["dense_tensor_bytes"] / gib),
+        xytext=(8.7, 0.5),
+        textcoords="data",
+        arrowprops=dict(arrowstyle="->", lw=0.75, color="0.25"),
+        fontsize=6.2,
+        bbox=dict(facecolor="white", edgecolor="none", alpha=0.84, pad=1.1),
+    )
+    ax.annotate(
+        f"tables plus temporary arrays: {_format_bytes(pick['working_set_bytes'])}",
+        xy=(pick["p"], pick["working_set_bytes"] / gib),
+        xytext=(8.1, 0.028),
+        textcoords="data",
+        arrowprops=dict(arrowstyle="->", lw=0.7, color="0.35"),
+        fontsize=6.2,
+        bbox=dict(facecolor="white", edgecolor="none", alpha=0.84, pad=1.1),
+    )
+
+    ax = axs[1]
+    q_plot_rows = [r for r in q_rows if int(r["Q"]) < max(int(rr["Q"]) for rr in q_rows)] if q_rows else []
+    if q_plot_rows:
+        q = np.array([r["Q"] for r in q_plot_rows], dtype=float)
+        err = np.array([r["rhs_rel_error_vs_Qref"] for r in q_plot_rows], dtype=float)
+        ax.plot(q, err, "o-", ms=4.0, lw=1.35, color=colors[0])
+        q24 = next((r for r in q_plot_rows if int(r["Q"]) == 24), None)
+        if q24 is not None:
+            e24 = float(q24["rhs_rel_error_vs_Qref"])
+            exp24 = int(math.floor(math.log10(abs(e24)))) if e24 > 0 else 0
+            mant24 = e24 / (10.0**exp24) if e24 > 0 else 0.0
+            ax.annotate(
+                rf"${mant24:.1f}\times10^{{{exp24}}}$ at $Q=24$",
+                xy=(24, e24),
+                xytext=(15.2, 1.3e-9),
+                textcoords="data",
+                arrowprops=dict(arrowstyle="->", lw=0.7, color="0.25"),
+                fontsize=6.2,
+                bbox=dict(facecolor="white", edgecolor="none", alpha=0.84, pad=1.1),
+            )
+    ax.set_yscale("log")
+    ax.set_xlim(5, 34)
+    ax.set_xlabel(r"SOE quadrature points $Q$")
+    ax.set_ylabel(r"relative error in $\dot f=Q(f,f)$")
+    ax.grid(True, alpha=0.22)
+    ax.text(-0.14, 1.02, "(b)", transform=ax.transAxes, weight="bold", va="top")
+    ax.text(0.97, 0.90, r"$Q_{\rm ref}=48$", transform=ax.transAxes, ha="right", va="top", fontsize=6.4)
+
+    fig.savefig(f"{outprefix}.pdf", bbox_inches="tight")
+    fig.savefig(f"{outprefix}.png", dpi=int(dpi), bbox_inches="tight")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Reviewer-proof PRL benchmark for one-center/SOE Hermite Landau evaluation")
-    ap.add_argument("--nmax_list", default="4,6,8,10,12,14,16")
+    ap.add_argument("--nmax_list", default="4,6,8,10,12,14") #### THIS SHOULD BE 16 FOR FULL SWEEP, BUT 10 FOR CI SPEED
     ap.add_argument("--Q", type=int, default=12)
     ap.add_argument("--maxK", type=int, default=256)
     ap.add_argument("--u", type=float, default=1.5)
@@ -413,11 +492,12 @@ def main() -> None:
     ap.add_argument("--dense_validate_nmax", type=int, default=3)
     ap.add_argument("--dense_apply_time_budget", type=float, default=30.0)
     ap.add_argument("--dense_apply_memory_budget_gib", type=float, default=8.0)
-    ap.add_argument("--dense_apply_max_nmax", type=int, default=4)
+    ap.add_argument("--dense_apply_max_nmax", type=int, default=3) #### THIS SHOULD BE 4 FOR FULL SWEEP, BUT 3 FOR CI SPEED
     ap.add_argument("--q_sweep_nmax", type=int, default=12)
     ap.add_argument("--q_sweep", default="6,8,10,12,16,24,32,48")
     ap.add_argument("--q_sweep_repeats", type=int, default=1)
     ap.add_argument("--outprefix", default="Fig1_PRL_tensor_barrier")
+    ap.add_argument("--onecol_outprefix", default="Fig1_PRL_tensor_barrier_onecol")
     ap.add_argument("--csv", default="prl_benchmark_reviewproof.csv")
     ap.add_argument("--json", default="prl_benchmark_reviewproof.json")
     ap.add_argument("--dpi", type=int, default=300)
@@ -571,6 +651,7 @@ def main() -> None:
         meta["jax"] = f"not importable: {exc}"
     Path(args.json).write_text(json.dumps(meta, indent=2))
     _plot(rows, dense_rows, dense_apply_rows, q_rows, args.outprefix, args.dpi)
+    _plot_onecol(rows, q_rows, args.onecol_outprefix, args.dpi)
 
     if rows:
         pick = sorted(rows, key=lambda r: int(r["p"]))[-1]
@@ -599,7 +680,10 @@ def main() -> None:
                 f"[fact] Dense stored-tensor contraction timing reached p={last_dense['p']} "
                 f"(nmax={last_dense['nmax']}) with median {last_dense['dense_apply_time_s']:.3e}s."
             )
-        print(f"[ok] wrote {csv_path}, {dense_csv}, {dense_apply_csv}, {q_csv}, {args.json}, {args.outprefix}.pdf, {args.outprefix}.png")
+        print(
+            f"[ok] wrote {csv_path}, {dense_csv}, {dense_apply_csv}, {q_csv}, {args.json}, "
+            f"{args.outprefix}.pdf/png, {args.onecol_outprefix}.pdf/png"
+        )
 
 
 if __name__ == "__main__":
