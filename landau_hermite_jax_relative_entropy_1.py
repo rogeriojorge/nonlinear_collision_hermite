@@ -902,6 +902,15 @@ def _thermal_temperature_from_invariants(inv: np.ndarray, sp: Species) -> float:
     return (2.0 / 3.0) * Wth_per_n
 
 
+def _thermal_momentum_scale_from_invariants(inv: np.ndarray, sp: Species) -> float:
+    """Initial thermal momentum scale m n sqrt(2T/m), used when total P0=0."""
+    inv = np.asarray(inv, dtype=np.float64)
+    n = abs(float(inv[0]))
+    T = float(_thermal_temperature_from_invariants(inv, sp))
+    if (not np.isfinite(T)) or T <= 0.0:
+        T = float(_Teq_from_species(sp))
+    return max(1e-30, n * math.sqrt(2.0 * abs(float(sp.m)) * T))
+
 def build_maxwellian_tensor_from_invariants(
     *,
     nmax: int,
@@ -2408,6 +2417,7 @@ def make_fig1_panel(
     """
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
+    import matplotlib.patheffects as pe
 
     plt.rcParams.update(
         {
@@ -2433,23 +2443,6 @@ def make_fig1_panel(
 
     fig = plt.figure(figsize=(4.6, 5.2), dpi=300)
     gs = fig.add_gridspec(2, 2, left=0.07, right=0.995, bottom=0.05, top=0.95, wspace=0.30, hspace=0.25)
-
-    def _drifts_1sp(inv: np.ndarray, *, mass: float, vth: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        n0 = float(inv[0, 0])
-        P0 = inv[0, 1:4].astype(np.float64)
-        W0 = float(inv[0, 4])
-        dn = np.abs(inv[:, 0] - n0) / max(1e-30, abs(n0))
-        Pscale = max(1e-30, abs(mass * n0 * vth))
-        dP = np.linalg.norm(inv[:, 1:4] - P0[None, :], axis=1) / Pscale
-        dW = np.abs(inv[:, 4] - W0) / max(1e-30, abs(W0))
-        return dn, dP, dW
-
-    def _drifts_2sp_tot(inv2a_: np.ndarray, inv2b_: np.ndarray, *, PscaleT: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        invT = inv2a_ + inv2b_
-        dn = np.abs(invT[:, 0] - invT[0, 0]) / max(1e-30, abs(invT[0, 0]))
-        dP = np.linalg.norm(invT[:, 1:4] - invT[0, 1:4][None, :], axis=1) / max(1e-30, PscaleT)
-        dW = np.abs(invT[:, 4] - invT[0, 4]) / max(1e-30, abs(invT[0, 4]))
-        return dn, dP, dW
 
     def _idx_near(y: np.ndarray, target: float) -> int:
         y = np.asarray(y, dtype=np.float64)
@@ -2487,21 +2480,21 @@ def make_fig1_panel(
 
     # (a) Shared relaxation metrics: A/A0, dT/dT0, and entropy ratios for all cases.
     axa = fig.add_subplot(gs[0, 0]); _tidy(axa)
-    axa.plot(t1, A_ratio_nl, color="C0", label=r"$A/A_0$ (1sp, nl)")
+    axa.plot(t1, A_ratio_nl, color="C0", label=r"$\mathcal{A}/\mathcal{A}_0$ 1sp NL")
     if A_ratio_lin is not None:
-        axa.plot(t1, A_ratio_lin, color="C0", ls="--", label=r"$A/A_0$ (1sp, lin)")
-    axa.plot(t2, dT_ratio_nl, color="C1", label=r"$(T_a-T_b)/(T_a-T_b)_0$ (2sp, nl)")
+        axa.plot(t1, A_ratio_lin, color="C0", ls="--", label=r"$\mathcal{A}/\mathcal{A}_0$ 1sp lin")
+    axa.plot(t2, dT_ratio_nl, color="C1", label=r"$\Delta T/\Delta T_0$ 2sp NL")
     if dT_ratio_lin is not None:
-        axa.plot(t2, dT_ratio_lin, color="C1", ls="--", label=r"$(T_a-T_b)/(T_a-T_b)_0$ (2sp, lin)")
-    axa.plot(t1, D1_ratio, color="C2", label=r"$\mathcal{D}/\mathcal{D}_0$ (1sp, nl)")
+        axa.plot(t2, dT_ratio_lin, color="C1", ls="--", label=r"$\Delta T/\Delta T_0$ 2sp lin")
+    axa.plot(t1, D1_ratio, color="C2", label=r"$\mathcal{D}/\mathcal{D}_0$ 1sp NL")
     if D1_ratio_lin is not None:
-        axa.plot(t1, D1_ratio_lin, color="C2", ls="--", label=r"$\mathcal{D}/\mathcal{D}_0$ (1sp, lin)")
-    axa.plot(t2, D2tot_ratio, color="C3", label=r"$\mathcal{D}_{\rm tot}/\mathcal{D}_0$ (2sp, nl)")
+        axa.plot(t1, D1_ratio_lin, color="C2", ls="--", label=r"$\mathcal{D}/\mathcal{D}_0$ 1sp lin")
+    axa.plot(t2, D2tot_ratio, color="C3", label=r"$\mathcal{D}_{\rm tot}/\mathcal{D}_0$ 2sp NL")
     if D2tot_ratio_lin is not None:
-        axa.plot(t2, D2tot_ratio_lin, color="C3", ls="--", label=r"$\mathcal{D}_{\rm tot}/\mathcal{D}_0$ (2sp, lin)")
+        axa.plot(t2, D2tot_ratio_lin, color="C3", ls="--", label=r"$\mathcal{D}_{\rm tot}/\mathcal{D}_0$ 2sp lin")
     axa.set_title("(a) Relaxation metrics")
-    axa.set_xlabel("t")
-    axa.set_ylabel("normalized (0 to 1)")
+    axa.set_xlabel(r"t $\nu$")
+    axa.set_ylabel("normalized metric")
     # Use a shared axis for A/A0 and dT/dT0 as requested (typically both ∈[0,1]).
     y_all = [A_ratio_nl, dT_ratio_nl, D1_ratio, D2tot_ratio]
     if A_ratio_lin is not None:
@@ -2527,49 +2520,62 @@ def make_fig1_panel(
     axa.grid(True, which="both", alpha=0.25)
     axa.legend(frameon=False, loc="upper right", borderpad=0.2, labelspacing=0.16, handlelength=1.7)
 
-    # (b) Conserved drifts for all cases.
+    # (b) Maximum normalized invariant drifts for all cases.
     axb = fig.add_subplot(gs[0, 1]); _tidy(axb)
-    eps = 1e-17
-    dn1, dP1, dW1 = _drifts_1sp(inv1, mass=sp1.m, vth=sp1.vth)
-    # 2sp totals momentum scale: sum of typical species momenta.
-    PscaleT = max(1e-30, abs(spa.m * inv2a[0, 0] * spa.vth) + abs(spb.m * inv2b[0, 0] * spb.vth))
-    dn2, dP2, dW2 = _drifts_2sp_tot(inv2a, inv2b, PscaleT=PscaleT)
-    axb.plot(t1, dn1 + eps, color="C0", lw=1.35, label="|Δn| 1sp nl")
-    axb.plot(t1, dP1 + eps, color="C1", lw=1.35, label="|ΔP| 1sp nl")
-    axb.plot(t1, dW1 + eps, color="C2", lw=1.35, label="|ΔW| 1sp nl")
-    axb.plot(t2, dn2 + eps, color="C0", lw=1.05, alpha=0.65, label="|Δn| 2sp nl")
-    axb.plot(t2, dP2 + eps, color="C1", lw=1.05, alpha=0.65, label="|ΔP| 2sp nl")
-    axb.plot(t2, dW2 + eps, color="C2", lw=1.05, alpha=0.65, label="|ΔW| 2sp nl")
+
+    def _drifts_1sp(inv: np.ndarray, *, sp: Species) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        n0 = float(inv[0, 0])
+        P0 = inv[0, 1:4].astype(np.float64)
+        W0 = float(inv[0, 4])
+        dn = np.abs(inv[:, 0] - n0) / max(1e-30, abs(n0))
+        dP = np.linalg.norm(inv[:, 1:4] - P0[None, :], axis=1)
+        dP /= _thermal_momentum_scale_from_invariants(inv[0], sp)
+        dW = np.abs(inv[:, 4] - W0) / max(1e-30, abs(W0))
+        return dn, dP, dW
+
+    def _drifts_2sp_tot(inv2a_: np.ndarray, inv2b_: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        invT = inv2a_ + inv2b_
+        dn = np.abs(invT[:, 0] - invT[0, 0]) / max(1e-30, abs(invT[0, 0]))
+        dP = np.linalg.norm(invT[:, 1:4] - invT[0, 1:4][None, :], axis=1)
+        Pscale = (
+            _thermal_momentum_scale_from_invariants(inv2a_[0], spa)
+            + _thermal_momentum_scale_from_invariants(inv2b_[0], spb)
+        )
+        dP /= max(1e-30, Pscale)
+        dW = np.abs(invT[:, 4] - invT[0, 4]) / max(1e-30, abs(invT[0, 4]))
+        return dn, dP, dW
+
+    cases = [("1sp NL", _drifts_1sp(inv1, sp=sp1))]
     if inv1_lin is not None:
-        dn1l, dP1l, dW1l = _drifts_1sp(inv1_lin, mass=sp1.m, vth=sp1.vth)
-        axb.plot(t1, dn1l + eps, color="C0", ls="--", lw=1.35, label="|Δn| 1sp lin")
-        axb.plot(t1, dP1l + eps, color="C1", ls="--", lw=1.35, label="|ΔP| 1sp lin")
-        axb.plot(t1, dW1l + eps, color="C2", ls="--", lw=1.35, label="|ΔW| 1sp lin")
+        cases.append(("1sp lin", _drifts_1sp(inv1_lin, sp=sp1)))
+
+    cases.append(("2sp NL", _drifts_2sp_tot(inv2a, inv2b)))
     if (inv2a_lin is not None) and (inv2b_lin is not None):
-        dn2l, dP2l, dW2l = _drifts_2sp_tot(inv2a_lin, inv2b_lin, PscaleT=PscaleT)
-        axb.plot(t2, dn2l + eps, color="C0", ls="--", lw=1.05, alpha=0.65, label="|Δn| 2sp lin")
-        axb.plot(t2, dP2l + eps, color="C1", ls="--", lw=1.05, alpha=0.65, label="|ΔP| 2sp lin")
-        axb.plot(t2, dW2l + eps, color="C2", ls="--", lw=1.05, alpha=0.65, label="|ΔW| 2sp lin")
+        cases.append(("2sp lin", _drifts_2sp_tot(inv2a_lin, inv2b_lin)))
+
+    vals = np.array(
+        [[np.nanmax(dn), np.nanmax(dP), np.nanmax(dW)] for _, (dn, dP, dW) in cases],
+        dtype=np.float64,
+    )
+
+    plot_floor = 1e-16
+    x = np.arange(len(cases), dtype=np.float64)
+    width = 0.24
+    labels = [r"$|\Delta n|/n_0$", r"$|\Delta\mathbf{P}|/P_{\rm th,0}$", r"$|\Delta W|/W_0$"]
+
+    for j, lab in enumerate(labels):
+        axb.bar(x + (j - 1) * width, np.maximum(vals[:, j], plot_floor), width=width, label=lab)
+
+    axb.axhline(plot_floor, color="0.5", lw=0.6, ls=":")
+    axb.text(0.7, 0.7, r"floor: $10^{-16}$", transform=axb.transAxes, fontsize=6)
+
     axb.set_yscale("log")
-    axb.set_title("(b) Conserved drifts")
-    axb.set_xlabel("t")
-    axb.set_ylabel("absolute relative drift (log)")
-    axb.grid(True, which="both", alpha=0.25)
-    # Two compact legends: (i) quantity colors, (ii) case/style meaning.
-    qty_leg = [
-        Line2D([0], [0], color="C0", lw=1.5, label=r"$|\Delta n|$"),
-        Line2D([0], [0], color="C1", lw=1.5, label=r"$|\Delta P|$"),
-        Line2D([0], [0], color="C2", lw=1.5, label=r"$|\Delta W|$"),
-    ]
-    case_leg = [
-        Line2D([0], [0], color="k", lw=1.5, ls="-", label="1sp nl"),
-        Line2D([0], [0], color="k", lw=1.5, ls="--", label="1sp lin"),
-        Line2D([0], [0], color="k", lw=1.2, ls="-", alpha=0.65, label="2sp nl"),
-        Line2D([0], [0], color="k", lw=1.2, ls="--", alpha=0.65, label="2sp lin"),
-    ]
-    leg1 = axb.legend(handles=qty_leg, frameon=False, loc="upper right", borderpad=0.2, labelspacing=0.18, handlelength=1.8)
-    axb.add_artist(leg1)
-    axb.legend(handles=case_leg, frameon=False, loc="upper left", borderpad=0.2, labelspacing=0.18, handlelength=1.8)
+    axb.set_title("(b) Conservation of invariants")
+    axb.set_ylabel("maximum normalized error")
+    axb.set_xticks(x)
+    axb.set_xticklabels([name for name, _ in cases], rotation=25, ha="right")
+    axb.grid(True, which="both", axis="y", alpha=0.25)
+    axb.legend(frameon=False, loc="upper right", borderpad=0.2, labelspacing=0.18, handlelength=1.2)
 
     # (c) 1sp: vx-slice at IC, at A/A0≈0.3, and the local Maxwellian reference.
     axc = fig.add_subplot(gs[1, 0]); _tidy(axc)
@@ -2581,14 +2587,14 @@ def make_fig1_panel(
     # Use a moment-constrained Maxwellian built from conserved invariants (t=0).
     s_M = maxwellian_slice_vx_from_invariants(inv1[0], sp1, xgrid=xgrid)
     axc.plot(xgrid, s_ic, color="k", lw=1.4, label="IC (t=0)")
-    axc.plot(xgrid, s_nl, color="C0", label=rf"nl @ $A/A_0\approx0.3$ (t={tA_nl:.3g})")
+    axc.plot(xgrid, s_nl, color="C0", label=r"NL @ $\mathcal{A}/\mathcal{A}_0\approx0.3$"+rf" (t={tA_nl:.3g})")
     if f_hist1_lin is not None and A_ratio_lin is not None:
         idxA_l = _idx_near(A_ratio_lin, 0.3)
         tA_l = float(t1[idxA_l])
         s_l = reconstruct_slice_vx_tensor(f_hist1_lin[idxA_l], nmax=nmax, xgrid=xgrid)
-        axc.plot(xgrid, s_l, color="C0", ls="--", label=rf"lin @ $A/A_0\approx0.3$ (t={tA_l:.3g})")
-    axc.plot(xgrid, s_M, color="C3", ls=":", alpha=0.9, label="Maxwellian")
-    axc.set_title("(c) 1 species (sp) vx-slice")
+        axc.plot(xgrid, s_l, color="C0", ls="--", label=r"lin @ $\mathcal{A}/\mathcal{A}_0\approx0.3$"+rf" (t={tA_l:.3g})")
+    # axc.plot(xgrid, s_M, color="C3", ls=":", alpha=0.9, label="Maxwellian")
+    axc.set_title(r"(c) one-species $v_x$ slice")
     axc.set_xlabel(r"$v_x/v_{th}$")
     axc.set_ylabel(r"$f(v_x,0,0)$")
     axc.grid(True, which="both", alpha=0.25)
@@ -2596,7 +2602,8 @@ def make_fig1_panel(
 
     # (d) 2sp: vx-slices at IC, at dT/dT0≈0.3, and Maxwellians at the final common equilibrium temperature.
     axd = fig.add_subplot(gs[1, 1]); _tidy(axd)
-    idxT_nl = _idx_near(dT_ratio_nl, 0.3)
+    target_2sp_slice = 0.30
+    idxT_nl = _idx_near(dT_ratio_nl, target_2sp_slice)
     tT_nl = float(t2[idxT_nl])
     # Plot vs a *common* velocity axis v_x/v_th,a (physical v normalized by species-a reference vth).
     xref = np.linspace(-2.0, 2.0, 500)
@@ -2614,24 +2621,28 @@ def make_fig1_panel(
     Ma = maxwellian_slice_vx_from_invariants(inva_eq, spa, xgrid=xref)
     Mb = maxwellian_slice_vx_from_invariants(invb_eq, spb, xgrid=xB)
 
-    axd.plot(xref, sa_ic, color="C0", lw=1.2, alpha=0.65, label="A IC (t=0)")
-    axd.plot(xref, sb_ic, color="C1", lw=1.2, alpha=0.65, label="B IC (t=0)")
-    axd.plot(xref, sa_nl, color="C0", lw=1.35, label=rf"A nl @ $dT/dT_0\approx0.3$ (t={tT_nl:.3g})")
-    axd.plot(xref, sb_nl, color="C1", lw=1.35, label=rf"B nl @ $dT/dT_0\approx0.3$ (t={tT_nl:.3g})")
+    axd.plot(xref, sa_ic, color="C0", lw=0.95, alpha=0.45, label="A IC")
+    axd.plot(xref, sb_ic, color="C1", lw=0.95, alpha=0.45, label="B IC")
+    axd.plot(xref, sa_nl, color="C0", lw=1.55, zorder=3, label="A NL")
+    axd.plot(xref, sb_nl, color="C1", lw=1.55, zorder=3, label="B NL")
     if (fa_hist_lin is not None) and (fb_hist_lin is not None) and (dT_ratio_lin is not None):
-        idxT_l = _idx_near(dT_ratio_lin, 0.3)
+        idxT_l = min(idxT_nl, len(dT_ratio_lin) - 1)
         tT_l = float(t2[idxT_l])
         sa_l = reconstruct_slice_vx_tensor(fa_hist_lin[idxT_l], nmax=nmax, xgrid=xref)
         sb_l = reconstruct_slice_vx_tensor(fb_hist_lin[idxT_l], nmax=nmax, xgrid=xB)
-        axd.plot(xref, sa_l, color="C2", ls="--", lw=1.85, label=rf"A lin @ $dT/dT_0\approx0.3$ (t={tT_l:.3g})")
-        axd.plot(xref, sb_l, color="C3", ls="--", lw=1.85, label=rf"B lin @ $dT/dT_0\approx0.3$ (t={tT_l:.3g})")
-    axd.plot(xref, Ma, color="C0", ls=":", alpha=0.85, label=rf"A Maxwellian ($T={Teq_star:.3g}$)")
-    axd.plot(xref, Mb, color="C1", ls=":", alpha=0.85, label=rf"B Maxwellian ($T={Teq_star:.3g}$)")
-    axd.set_title("(d) 2 species (sp) vx-slices")
+        halo = [pe.Stroke(linewidth=3.0, foreground="white"), pe.Normal()]
+        axd.plot(xref, sa_l, color="C0", ls=(0, (4.8, 1.2)), lw=2.05, zorder=5,
+                  path_effects=halo, label="A lin")
+        axd.plot(xref, sb_l, color="C1", ls=(0, (4.8, 1.2)), lw=2.05, zorder=5,
+                  path_effects=halo, label="B lin")
+    axd.text(0.97, 0.04, rf"$t_*={tT_nl:.2g}$", transform=axd.transAxes,
+             va="bottom", ha="right", fontsize=6,
+             bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", pad=0.8))
+    axd.set_title(r"(d) two-species $v_x$ slices")
     axd.set_xlabel(r"$v_x/v_{th,a}$")
     axd.set_ylabel(r"$f(v_x,0,0)$")
     axd.grid(True, which="both", alpha=0.25)
-    axd.legend(frameon=False, loc="upper left", borderpad=0.2, labelspacing=0.16, handlelength=1.7)
+    axd.legend(frameon=False, loc="upper right", borderpad=0.2, labelspacing=0.16, handlelength=1.5)
 
     base = outprefix
     # fig.savefig(base + ".png", dpi=450, bbox_inches="tight")
@@ -3249,7 +3260,7 @@ def run_tests(args) -> None:
         ax = fig.add_subplot(111)
         t_plot = idxs * dt_phys
         ax.set_title("Relative-entropy (KL) monotonicity check (sampled)")
-        ax.set_xlabel("t")
+        ax.set_xlabel(r"t $\nu$")
         ax.set_ylabel("normalized value")
         ax.grid(True, which="both", alpha=0.3)
         ax.plot(t_plot, D1r, marker="o", ms=3, label=r"$\mathcal{D}/\mathcal{D}_0$ (1sp nl, KL)")
@@ -3940,7 +3951,10 @@ def main() -> None:
     if nmax >= 2:
         Ta0 = temperature_from_invariants(invariants_from_tensor(fa0, spa))
         Tb0 = temperature_from_invariants(invariants_from_tensor(fb0, spb))
-        print(f"[IC/Fig1] 2sp temps: Ta={Ta0:.4g}  Tb={Tb0:.4g}  dT={Ta0-Tb0:.4g}", flush=True)
+        dT0_actual = Ta0 - Tb0
+        print(f"[IC/Fig1] 2sp temps: Ta={Ta0:.4g}  Tb={Tb0:.4g}  dT={dT0_actual:.4g}", flush=True)
+        if abs(dT0_actual - float(args.dT2)) > 5e-3:
+            print(f"[warn] requested --dT2={float(args.dT2):.4g}, but IC achieved dT={dT0_actual:.4g}; reduce --dT2 or retune the quartic IC.", flush=True)
 
     # Fixed-point checks (Maxwellians)
     fM1 = np.zeros_like(f0_1sp); fM1[0, 0, 0] = f0_1sp[0, 0, 0]
@@ -4241,20 +4255,24 @@ def main() -> None:
             inv2b_lin = np.vstack([invariants_from_tensor(fb_hist_lin[i], spb) for i in range(len(t2))])
 
         # Invariant drift prints
-        def _max_rel_drift(inv: np.ndarray) -> Tuple[float, float, float]:
+        def _max_norm_drift(inv: np.ndarray, Pscale: float) -> Tuple[float, float, float]:
             n0 = float(inv[0, 0])
             P0 = inv[0, 1:4].astype(np.float64)
             W0 = float(inv[0, 4])
             dn = float(np.max(np.abs(inv[:, 0] - n0) / max(1e-30, abs(n0))))
-            dP = float(np.max(np.linalg.norm(inv[:, 1:4] - P0[None, :], axis=1) / max(1e-30, np.linalg.norm(P0) + 1.0)))
+            dP = float(np.max(np.linalg.norm(inv[:, 1:4] - P0[None, :], axis=1) / max(1e-30, Pscale)))
             dW = float(np.max(np.abs(inv[:, 4] - W0) / max(1e-30, abs(W0))))
             return dn, dP, dW
 
-        dn1, dP1, dW1 = _max_rel_drift(inv1)
+        dn1, dP1, dW1 = _max_norm_drift(inv1, _thermal_momentum_scale_from_invariants(inv1[0], sp1))
         invT = inv2a + inv2b
-        dnT, dPT, dWT = _max_rel_drift(invT)
-        print(f"[inv:{tag}] 1sp max rel drift: n={dn1:.3e}  |P|={dP1:.3e}  W={dW1:.3e}", flush=True)
-        print(f"[inv:{tag}] 2sp max rel drift: n_tot={dnT:.3e}  |P_tot|={dPT:.3e}  W_tot={dWT:.3e}", flush=True)
+        PscaleT = (
+            _thermal_momentum_scale_from_invariants(inv2a[0], spa)
+            + _thermal_momentum_scale_from_invariants(inv2b[0], spb)
+        )
+        dnT, dPT, dWT = _max_norm_drift(invT, PscaleT)
+        print(f"[inv:{tag}] 1sp max normalized drift: n={dn1:.3e}  |P|/Pth={dP1:.3e}  W={dW1:.3e}", flush=True)
+        print(f"[inv:{tag}] 2sp max normalized drift: n_tot={dnT:.3e}  |P_tot|/Pth={dPT:.3e}  W_tot={dWT:.3e}", flush=True)
 
         # Entropy time series (1sp and 2sp total)
         print(f"[entropy:{tag}] computing D(t) for 1sp + 2sp ...", flush=True)
