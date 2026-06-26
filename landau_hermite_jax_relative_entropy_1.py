@@ -2635,7 +2635,9 @@ def make_fig1_panel(
                  lw=2.05, zorder=5, marker="o", markevery=45,
                  ms=1.7, mfc="white", mew=0.5,
                  path_effects=halo, label="A lin")
-        axd.plot(xref, sb_l, color="C1", ls=(0, (4.8, 1.2)), lw=2.05, zorder=5,
+        axd.plot(xref, sb_l, color="C1", ls=(0, (4.8, 1.2)),
+                  lw=2.05, zorder=5, marker="o", markevery=45,
+                  ms=1.7, mfc="white", mew=0.5,
                   path_effects=halo, label="B lin")
     axd.text(0.06, 0.9, rf"$t={tT_nl:.2f}$", transform=axd.transAxes,
              va="bottom", ha="left", fontsize=6, bbox=dict(facecolor="white",
