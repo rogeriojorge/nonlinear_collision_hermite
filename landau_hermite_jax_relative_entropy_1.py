@@ -2493,7 +2493,7 @@ def make_fig1_panel(
     if D2tot_ratio_lin is not None:
         axa.plot(t2, D2tot_ratio_lin, color="C3", ls="--", label=r"$\mathcal{D}_{\rm tot}/\mathcal{D}_0$ 2sp lin")
     axa.set_title("(a) Relaxation metrics")
-    axa.set_xlabel(r"t $\nu$")
+    axa.set_xlabel(r"$t\nu^{ab}$")
     axa.set_ylabel("normalized metric")
     # Use a shared axis for A/A0 and dT/dT0 as requested (typically both ∈[0,1]).
     y_all = [A_ratio_nl, dT_ratio_nl, D1_ratio, D2tot_ratio]
@@ -2567,7 +2567,7 @@ def make_fig1_panel(
         axb.bar(x + (j - 1) * width, np.maximum(vals[:, j], plot_floor), width=width, label=lab)
 
     axb.axhline(plot_floor, color="0.5", lw=0.6, ls=":")
-    axb.text(0.7, 0.7, r"floor: $10^{-16}$", transform=axb.transAxes, fontsize=6)
+    axb.text(0.97, 0.68, r"plot floor: $10^{-16}$", transform=axb.transAxes, ha="right", fontsize=6)
 
     axb.set_yscale("log")
     axb.set_title("(b) Conservation of invariants")
@@ -2631,15 +2631,17 @@ def make_fig1_panel(
         sa_l = reconstruct_slice_vx_tensor(fa_hist_lin[idxT_l], nmax=nmax, xgrid=xref)
         sb_l = reconstruct_slice_vx_tensor(fb_hist_lin[idxT_l], nmax=nmax, xgrid=xB)
         halo = [pe.Stroke(linewidth=3.0, foreground="white"), pe.Normal()]
-        axd.plot(xref, sa_l, color="C0", ls=(0, (4.8, 1.2)), lw=2.05, zorder=5,
-                  path_effects=halo, label="A lin")
+        axd.plot(xref, sa_l, color="C0", ls=(0, (4.8, 1.2)),
+                 lw=2.05, zorder=5, marker="o", markevery=45,
+                 ms=1.7, mfc="white", mew=0.5,
+                 path_effects=halo, label="A lin")
         axd.plot(xref, sb_l, color="C1", ls=(0, (4.8, 1.2)), lw=2.05, zorder=5,
                   path_effects=halo, label="B lin")
-    axd.text(0.97, 0.04, rf"$t_*={tT_nl:.2g}$", transform=axd.transAxes,
-             va="bottom", ha="right", fontsize=6,
-             bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", pad=0.8))
+    axd.text(0.06, 0.9, rf"$t={tT_nl:.2f}$", transform=axd.transAxes,
+             va="bottom", ha="left", fontsize=6, bbox=dict(facecolor="white",
+                alpha=0.75, edgecolor="none", pad=0.8))
     axd.set_title(r"(d) two-species $v_x$ slices")
-    axd.set_xlabel(r"$v_x/v_{th,a}$")
+    axd.set_xlabel(r"$v_x/v_{{\rm th},A}$")
     axd.set_ylabel(r"$f(v_x,0,0)$")
     axd.grid(True, which="both", alpha=0.25)
     axd.legend(frameon=False, loc="upper right", borderpad=0.2, labelspacing=0.16, handlelength=1.5)
@@ -3824,8 +3826,7 @@ def main() -> None:
     ap.add_argument("--entropy_nx", type=int, default=22)
     ap.add_argument("--entropy_xlim", type=float, default=5.0)
 
-    # Positivity enforcement and filtering intentionally removed for speed-focused runs.
-    # Save-to-npz and no-plot modes removed for a leaner Fig1/tests workflow.
+    # Save-to-npz and no-plot modes were removed for a leaner Fig1/tests workflow.
 
     ap.add_argument("--run_tests", action="store_true", help="Run internal correctness/performance tests and write plots into tests_landau_hermite/.")
     ap.add_argument("--tests_outdir", type=str, default="tests_landau_hermite")
