@@ -11,6 +11,8 @@ from landau_hermite_jax_relative_entropy_1 import (
     rearranged_pair_tables_np,
     rhs_ab_np,
     rhs_ab_rearranged_np,
+    Species,
+    invariants_from_tensor,
 )
 
 
@@ -69,6 +71,19 @@ class RearrangedContractionTest(unittest.TestCase):
         result = np.asarray(build_jax_functions(table, contraction="rearranged")(
             direction, background))[-1, -1, -1]
         self.assertAlmostEqual(result, expected, delta=1e-6)
+
+    def test_pair_conserves_number_total_momentum_and_energy(self):
+        sa, sb = np.sqrt(2.), np.sqrt(2./11.)
+        common = dict(nmax=3, Q=24, maxK=32)
+        ab = build_model_tables_np(**common, ma=1., mb=11., vtha=sa, vthb=sb, nu_ab=1.)
+        # Equal physical pair coefficient: nu_ba / nu_ab = (sa/sb)^6 / 11^2.
+        ba = build_model_tables_np(**common, ma=11., mb=1., vtha=sb, vthb=sa, nu_ab=11.)
+        da = rhs_ab_rearranged_np(self.fa, self.fb, ab)
+        db = rhs_ab_rearranged_np(self.fb, self.fa, ba)
+        ia = invariants_from_tensor(da, Species(1., sa))
+        ib = invariants_from_tensor(db, Species(11., sb))
+        np.testing.assert_allclose([ia[0], ib[0]], 0., atol=1e-12)
+        np.testing.assert_allclose(ia[1:] + ib[1:], 0., atol=1e-11)
 
     def test_opt_in_and_invalid_modes(self):
         t = self.table

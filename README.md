@@ -34,6 +34,16 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 JAX_PLATFORMS=cpu \
   python -m unittest -v test_rearranged_contraction
 ```
 
+The high-order test uses the input direction `fa[16,16,16]=1` and an analytic
+Maxwellian `fb`, with the masses, scales and pair coefficient specified in the
+test. Its reference evaluates the existing one-dimensional P/M formulas as
+polynomials in the SOE integration variable on `[0,1]`: multiply the three axis
+polynomials, apply the outer creation ladder and pair prefactor, and integrate
+each monomial `c_k s^k` as `c_k/(k+1)`. The resulting corner coefficient is
+`-12.12547373505867054708649179599768` at 120 decimal digits. The regression
+tolerance `1e-6` allows the finite `Q=24` quadrature and float64 table errors;
+it is not a claim of 120-digit accuracy for the float64 implementation.
+
 ## PRL evidence figures
 
 The PRL support scripts are designed to run from the repository root and write
