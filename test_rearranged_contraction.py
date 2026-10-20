@@ -1,9 +1,9 @@
 """Checks for the optional full dense Landau contraction."""
 
 import unittest
+import math
 
 import numpy as np
-from scipy.special import gammaln
 
 from landau_hermite_jax_relative_entropy_1 import (
     build_jax_functions,
@@ -61,9 +61,9 @@ class RearrangedContractionTest(unittest.TestCase):
         direction = np.zeros((17, 17, 17))
         direction[-1, -1, -1] = 1.
         # Analytic AW coefficients of a Maxwellian with variance 1.2/11.
-        k = np.arange(9)
         c = np.zeros(17)
-        c[::2] = np.exp(.5*gammaln(2*k+1)-k*np.log(2)-gammaln(k+1)) * .2**k
+        c[::2] = [math.sqrt(math.factorial(2*k))/(2**k*math.factorial(k))*.2**k
+                  for k in range(9)]
         background = .2/sb**3 * np.einsum("i,j,k->ijk", c, c, c)
         # Independent 120-digit polynomial antiderivative of the P/M formulas
         # for the (16,16,16) output; it does not use either dense contraction.
