@@ -1,6 +1,39 @@
 # nonlinear_collision_hermite
 Repository for code used in nonlinear collision operator study using Hermite polynomials.
 
+## Optional dense contraction with P/M precontraction
+
+The NumPy pair RHS and JAX builder accept `contraction="rearranged"`:
+
+```python
+rhs = build_jax_functions(tables, contraction="rearranged")
+df = rhs(fa, fb)
+
+df_numpy = rhs_ab_np(fa, fb, tables, use_tt=False, tt_tol=0., tt_rmax=0,
+                     contraction="rearranged")
+```
+
+This evaluates the same bilinear SOE operator by contracting each
+one-dimensional projection `P` with its kernel factor `M` before multiplying
+across dimensions. It avoids the severe floating-point cancellation possible
+when a rounded dense `S` is multiplied by high-order triple-Hermite factors.
+It uses full dense coefficient arrays and does not support the optional TT
+path. Existing calls retain `contraction="canonical"`.
+
+For repeated NumPy evaluations, compute `W = rearranged_pair_tables_np(tables)`
+once and pass it to `rhs_ab_rearranged_np(fa, fb, tables, W)`; the JAX builder
+already caches these tables in its returned function. This rearrangement does
+not impose positivity, filtering, or invariant projection, and is not a general
+floating-point accuracy guarantee.
+
+Run the focused low-order equivalence, dtype, mode-selection and high-order
+polynomial-reference checks with:
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 JAX_PLATFORMS=cpu \
+  python -m unittest -v test_rearranged_contraction
+```
+
 ## PRL evidence figures
 
 The PRL support scripts are designed to run from the repository root and write
