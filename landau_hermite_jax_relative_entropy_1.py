@@ -84,6 +84,8 @@ import math
 import os
 import shutil
 import time
+from decimal import Decimal, localcontext
+from fractions import Fraction
 from functools import lru_cache
 from datetime import datetime
 from dataclasses import dataclass
@@ -171,72 +173,65 @@ def _logfac_np(n: np.ndarray) -> np.ndarray:
 
 
 def leggauss_01_np(Q: int) -> Tuple[np.ndarray, np.ndarray]:
-    x, w = np.polynomial.legendre.leggauss(Q)
-    s = 0.5 * (x + 1.0)
-    w01 = 0.5 * w
-    return s.astype(np.float64), w01.astype(np.float64)
+    """Gauss-Legendre on [0,1], correctly rounded (numpy's nodes and weights are up to 1e-12 off at Q >= 48)."""
+    with localcontext() as ctx:
+        ctx.prec = 60
+        s, w = [], []
+        for x0 in np.polynomial.legendre.leggauss(Q)[0].tolist():
+            x = Decimal(x0)
+            for _ in range(3):  # Newton on P_Q from a 1e-15 start
+                p0, p1 = Decimal(1), x
+                for k in range(1, Q):
+                    p0, p1 = p1, ((2 * k + 1) * x * p1 - k * p0) / (k + 1)
+                dp = Q * (p0 - x * p1) / ((1 - x) * (1 + x))
+                x -= p1 / dp
+            s.append(float((x + 1) / 2))
+            w.append(float(1 / ((1 - x) * (1 + x) * dp * dp)))
+    return np.array(s, dtype=np.float64), np.array(w, dtype=np.float64)
+
+
+def _sqrt_fraction(num: int, den: int = 1) -> float:
+    """sqrt(num/den) of exact integers, within 1 ulp; exp(lgamma) tables carry 1e-14 relative errors."""
+    return math.sqrt(Fraction(num, den))
 
 
 def t_factor_np(max_n: int) -> np.ndarray:
     """
-    t_n = sqrt((2n)!)/(2^n n!), returned for n=0..max_n as float64.
+    t_n = sqrt((2n)!)/(2^n n!) = sqrt(C(2n,n)/4^n), returned for n=0..max_n as float64.
     """
-    n = np.arange(max_n + 1, dtype=np.float64)
-    return np.exp(0.5 * _logfac_np(2 * n) - n * np.log(2.0) - _logfac_np(n))
+    return np.array([_sqrt_fraction(math.comb(2 * n, n), 4**n) for n in range(max_n + 1)], dtype=np.float64)
 
 
-def build_a1d_np(kp_max: int, kb_max: int, cos_t: float, sin_t: float) -> np.ndarray:
+def build_a1d_np(kp_max: int, kb_max: int, vtha: float, vthb: float) -> np.ndarray:
     """
-    a1d(kp,kb) = (-1)^kb cos^kp sin^kb sqrt((kp+kb)!/(kp! kb!))
-    shape (kp_max+1, kb_max+1)
+    a1d(kp,kb) = (-1)^kb cos^kp sin^kb sqrt((kp+kb)!/(kp! kb!)), cos^2 = vtha^2/(vtha^2+vthb^2),
+    from exact rationals; shape (kp_max+1, kb_max+1)
     """
-    kp = np.arange(kp_max + 1, dtype=np.int64)[:, None]
-    kb = np.arange(kb_max + 1, dtype=np.int64)[None, :]
-    kp_f = kp.astype(np.float64)
-    kb_f = kb.astype(np.float64)
-    loga = 0.5 * (_logfac_np(kp_f + kb_f) - _logfac_np(kp_f) - _logfac_np(kb_f))
-    base = np.exp(loga)
-    sign = np.where((kb % 2) == 0, 1.0, -1.0)
-    return sign * (cos_t ** kp_f) * (sin_t ** kb_f) * base
+    va2, vb2 = Fraction(vtha) ** 2, Fraction(vthb) ** 2
+    cos2, sin2 = va2 / (va2 + vb2), vb2 / (va2 + vb2)
+    a = np.empty((kp_max + 1, kb_max + 1), dtype=np.float64)
+    for k in range(kp_max + 1):
+        for b in range(kb_max + 1):
+            value = math.comb(k + b, k) * cos2**k * sin2**b
+            a[k, b] = (-1.0) ** b * _sqrt_fraction(value.numerator, value.denominator)
+    return a
 
 
 def build_P1D_np(n_dual_max: int, n_prim_max: int, kp_max: int) -> np.ndarray:
     """
     Dense P1D table:
       P[n_dual, n_prim, nprime], with nprime=0..kp_max.
-    Matches the reference code's coefficient formula.
+    P = r! C(nd,r) C(npm,r) sqrt(nprime!/(nd! npm!)), r = (nd+npm-nprime)/2, from exact integers.
     """
-    nd = np.arange(n_dual_max + 1, dtype=np.int64)[:, None, None]
-    npm = np.arange(n_prim_max + 1, dtype=np.int64)[None, :, None]
-    npr = np.arange(kp_max + 1, dtype=np.int64)[None, None, :]
-
-    max_npr = nd + npm
-    parity_ok = ((npr - max_npr) % 2) == 0
-    in_range = (npr <= max_npr)
-    ok = parity_ok & in_range
-
-    r = (max_npr - npr) // 2
-    # valid where ok and 0<=r<=min(nd,npm)
-    ok = ok & (r >= 0) & (r <= nd) & (r <= npm)
-
-    nd_f = nd.astype(np.float64)
-    npm_f = npm.astype(np.float64)
-    npr_f = npr.astype(np.float64)
-    r_f = r.astype(np.float64)
-
-    # Guard log-factorials against masked-out negatives to avoid spurious NaNs/warnings.
-    lf = lambda x: _logfac_np(np.maximum(x, 0.0))
-
-    # logc = log(r!) + log(C(nd,r)) + log(C(npm,r)) + 0.5*log(npr!/(nd! npm!))
-    logc = (
-        lf(r_f)
-        + (lf(nd_f) - lf(r_f) - lf(nd_f - r_f))
-        + (lf(npm_f) - lf(r_f) - lf(npm_f - r_f))
-        + 0.5 * (lf(npr_f) - lf(nd_f) - lf(npm_f))
-    )
-
+    fac = math.factorial
     P = np.zeros((n_dual_max + 1, n_prim_max + 1, kp_max + 1), dtype=np.float64)
-    P[ok] = np.exp(logc[ok])
+    for nd in range(n_dual_max + 1):
+        for npm in range(n_prim_max + 1):
+            for r in range(min(nd, npm) + 1):
+                npr = nd + npm - 2 * r
+                if npr <= kp_max:
+                    c = fac(r) * math.comb(nd, r) * math.comb(npm, r)
+                    P[nd, npm, npr] = _sqrt_fraction(c * c * fac(npr), fac(nd) * fac(npm))
     return P
 
 
@@ -252,8 +247,9 @@ def Fq_table_np(t: np.ndarray, s_nodes: np.ndarray, maxK: int) -> np.ndarray:
     base = np.zeros((1, maxK + 1), dtype=np.float64)
     base[0, even[0]] = t[half[0, even[0]]]
     sign = np.where(((half % 2) == 0), 1.0, -1.0).astype(np.float64)
-    s = s_nodes.astype(np.float64)[:, None]
-    return (sign * base) * (s ** n.astype(np.float64))
+    # Correctly rounded powers: incoherent ulp errors of s**n are amplified by the P contractions.
+    s_pow = np.array([[float(Fraction(s) ** int(k)) for k in n[0]] for s in s_nodes.tolist()], dtype=np.float64)
+    return (sign * base) * s_pow
 
 
 def hankel_indices_np(kp_max: int, kb_max: int, shift: int) -> np.ndarray:
@@ -340,13 +336,11 @@ def apply_kronecker_3_np_batched(Mx: np.ndarray, My: np.ndarray, Mz: np.ndarray,
 
 
 def einsum_mpo_dot_np(g: np.ndarray, S: np.ndarray, Px: np.ndarray, Py: np.ndarray, Pz: np.ndarray) -> np.ndarray:
-    """Fast NumPy contraction for the MPO dot."""
-    tmp = np.tensordot(Px, g, axes=(1, 0))          # (x, d, b, c)
-    tmp = np.tensordot(Py, tmp, axes=(1, 2))        # (y, e, x, d, c)
-    tmp = np.tensordot(Pz, tmp, axes=(1, 4))        # (z, f, y, e, x, d)
-    tmp = np.transpose(tmp, (4, 2, 0, 5, 3, 1))     # (x, y, z, d, e, f)
-    out = np.tensordot(tmp, S, axes=([3, 4, 5], [0, 1, 2]))
-    return out
+    """MPO dot in the order that costs O(n^6) with an O(n^4) intermediate (same order as JAX einsum)."""
+    gx = np.tensordot(Px, g, axes=(1, 0))           # (x, d, b, c)
+    Sz = np.tensordot(S, Pz, axes=(2, 2))           # (d, e, z, c)
+    tmp = np.tensordot(gx, Sz, axes=([1, 3], [0, 3]))  # (x, b, e, z)
+    return np.tensordot(Py, tmp, axes=([1, 2], [1, 2])).transpose(1, 0, 2)  # (x, y, z)
 
 
 # ----------------------------
@@ -520,10 +514,11 @@ def build_model_tables_np(
 
     max_half = (maxK // 2) + 6
     t = t_factor_np(max_half)
-    Fq = Fq_table_np(t, s_nodes, maxK=maxK)  # (Q, maxK+1)
+    # Largest Hankel index gathered below is kp_max + nmax + 3 = 3 nmax + 4.
+    Fq = Fq_table_np(t, s_nodes, maxK=min(maxK, kp_max + nmax + 3))
 
-    a1d_kb = build_a1d_np(kp_max, nmax, cos_t, sin_t)
-    a1d_kbext = build_a1d_np(kp_max, nmax + 1, cos_t, sin_t)
+    a1d_kb = build_a1d_np(kp_max, nmax, vtha, vthb)
+    a1d_kbext = build_a1d_np(kp_max, nmax + 1, vtha, vthb)
     P1D = build_P1D_np(n_dual_max=nmax, n_prim_max=nmax + 1, kp_max=kp_max)
 
     # Precompute all needed Hankel indices for shifts in [-1..3]
@@ -1603,6 +1598,88 @@ def build_jax_functions(T: ModelTablesNP):
     rhs_ab_jit = jax.jit(rhs_ab_jax)
 
     return rhs_ab_jit
+
+
+def build_jax_functions_gauss(T: ModelTablesNP, *, split_stages: bool = False):
+    """
+    Same bilinear Q_ab(fa, fb) as `build_jax_functions`, evaluated on Gauss-Hermite nodes in O(Q n^4).
+
+    P1D[x, a, k] is the triple product of orthonormal Hermite polynomials phi under the unit Gaussian,
+    so sum_{a,k} P1D[x, a, k] g_a S_k = sum_j w_j phi_x(v_j) g(v_j) S(v_j) exactly for 2n = p_kp nodes
+    (the degree is at most 4n - 2). The P contractions (O(n^6)) become a pointwise product on the
+    (2n)^3 nodes, and the sources S are built directly on the nodes by folding phi_k(v_j) into the 1-D
+    kernels M, so no coefficient-space S is formed. The A and B terms of each (i, j) differ only along
+    i, which merges them, and only 15 of the 36 Kronecker products are distinct (S1 is symmetric).
+    """
+    jax, jnp = _maybe_import_jax("jax")
+    assert jax is not None and jnp is not None
+
+    p, ng = T.p, T.p_kp
+    v, w = np.polynomial.hermite_e.hermegauss(ng)
+    w = w / math.sqrt(2.0 * math.pi)
+    phi = np.zeros((ng + 1, ng), dtype=np.float64)  # phi[k, j] = phi_k(v_j)
+    phi[0], phi[1] = 1.0, v
+    for k in range(1, ng):
+        phi[k + 1] = (v * phi[k] - math.sqrt(k) * phi[k - 1]) / math.sqrt(k + 1)
+
+    # Distinct 1-D kernels K[q, j, b] on the nodes; term[i, j, t] = kernel ids per direction.
+    kernels: list = []
+
+    def kernel_id(M_qkb: np.ndarray) -> int:
+        K = np.einsum("qkb,kj->qjb", M_qkb, phi[:ng], optimize=True)
+        for idx, other in enumerate(kernels):
+            if np.max(np.abs(K - other)) <= 1e-12 * np.max(np.abs(other)):
+                return idx
+        kernels.append(K)
+        return len(kernels) - 1
+
+    term = {}
+    for i in range(3):
+        for j in range(3):
+            for t in range(2):
+                A, B = T.M_buildS[:, i, j, 2 * t], T.M_buildS[:, i, j, 2 * t + 1]
+                term[i, j, t] = tuple(kernel_id(A[:, d] + B[:, d] if d == i else A[:, d]) for d in range(3))
+    K = [jnp.asarray(x, dtype=jnp.float64) for x in kernels]
+
+    wq = jnp.asarray(T.wq_prefI, dtype=jnp.float64)
+    V = jnp.asarray(phi[:p].T, dtype=jnp.float64)  # (j, a)
+    V_up = jnp.asarray(phi[1 : p + 1].T * np.sqrt(np.arange(1, p + 1)), dtype=jnp.float64)  # sqrt(a+1) phi_{a+1}
+    project = jnp.asarray(phi[:p] * w, dtype=jnp.float64)  # (x, j)
+    sqrt_p = jnp.sqrt(jnp.arange(p, dtype=jnp.float64))
+
+    def to_nodes(Vx, Vy, Vz, f):
+        return jnp.einsum("ia,jb,kc,abc->ijk", Vx, Vy, Vz, f)
+
+    def sources_on_nodes(fb):
+        fb = jnp.asarray(fb, dtype=jnp.float64)
+        # Partial Kronecker products shared between terms are computed once.
+        x_part = {a: jnp.einsum("qja,abc->qjbc", K[a], fb) for a in {ids[0] for ids in term.values()}}
+        xy_part = {
+            ids[:2]: jnp.einsum("qkb,qjbc->qjkc", K[ids[1]], x_part[ids[0]]) for ids in term.values()
+        }
+        return {ids: jnp.einsum("qlc,qjkc,q->jkl", K[ids[2]], xy_part[ids[:2]], wq) for ids in term.values()}
+
+    def contract_on_nodes(fa, S):
+        fa = jnp.asarray(fa, dtype=jnp.float64)
+        g = (to_nodes(V_up, V, V, fa), to_nodes(V, V_up, V, fa), to_nodes(V, V, V_up, fa))
+        f_nodes = to_nodes(V, V, V, fa)
+
+        rhs = jnp.zeros((p, p, p), dtype=jnp.float64)
+        for i in range(3):
+            S2_i = sum(S[term[i, j, 1]] for j in range(3))
+            h = sum(g[j] * S[term[i, j, 0]] for j in range(3)) - T.ratio * f_nodes * S2_i
+            h = jnp.einsum("xi,yj,zk,ijk->xyz", project, project, project, h)
+            # Outer ladder: rhs[k] += sqrt(k_i) h[k - e_i].
+            shape = [1, 1, 1]
+            shape[i] = p - 1
+            target = tuple(slice(1, None) if d == i else slice(None) for d in range(3))
+            source = tuple(slice(None, -1) if d == i else slice(None) for d in range(3))
+            rhs = rhs.at[target].add(sqrt_p[1:].reshape(shape) * h[source])
+        return T.pref_cos * rhs
+
+    if split_stages:  # for profiling
+        return jax.jit(sources_on_nodes), jax.jit(contract_on_nodes)
+    return jax.jit(lambda fa, fb: contract_on_nodes(fa, sources_on_nodes(fb)))
 
 
 # ----------------------------
@@ -3811,6 +3888,7 @@ def main() -> None:
     ap.add_argument("--use_tt", action="store_true", help="Use optional TT/MPO contraction in NumPy backend (debug/scaling).")
     ap.add_argument("--tt_tol", type=float, default=1e-12)
     ap.add_argument("--tt_rmax", type=int, default=32)
+    ap.add_argument("--rhs_method", choices=("gauss", "mpo"), default="gauss", help="JAX collision contraction: Gauss-Hermite nodes, O(Q n^4), or the coefficient-space MPO einsum, O(Q n^4 + n^6).")
     ap.add_argument("--nu_LB", type=float, default=0.10, help="Lenard-Bernstein / linearized Dougherty collisionality used to damp Hermite moments diagonally.")
     ap.add_argument("--dt_1sp", type=float, default=0.15)
     ap.add_argument("--dt_2sp", type=float, default=0.15)
@@ -3846,6 +3924,8 @@ def main() -> None:
     ap.add_argument("--tests_maxK_sweep", type=str, default="128,256,512", help="Comma-separated maxK values for convergence sweeps in --run_tests.")
     ap.add_argument("--tests_max_numpy_nmax", type=int, default=3, help="In --run_tests, only do NumPy-vs-JAX comparisons up to this nmax (NumPy gets slow for larger nmax).")
     args = ap.parse_args()
+    if args.rhs_method == "gauss":
+        globals()["build_jax_functions"] = build_jax_functions_gauss
 
     args.nu_LB = max(float(args.nu_LB), 1e-300)/(args.nmax-1)/(args.nmax-2)/(args.nmax-3)  # avoid zero collisionality (no LB damping) which can cause issues at low nmax
     backend: BackendName = args.backend  # type: ignore[assignment]
