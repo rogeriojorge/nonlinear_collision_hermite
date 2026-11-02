@@ -104,6 +104,7 @@ python validation/fourier_landau.py --N 48 --L 8                # nonlinear dire
 python validation/fourier_landau.py --N 48 --L 8 --linearized   # dh/dt = C(h,M) + C(M,h) about the true Maxwellian
 python validation/fourier_landau.py --N 28 --L 8 --correct      # least-squares conservation correction, energy drift 1e-14
 python validation/hermite_laguerre.py                           # Hermite-Laguerre map against 5-D quadrature, and the 91-unknown evolution
+python -c "import sys; sys.path.insert(0,'validation'); from particle_landau import setup_threads; setup_threads(1); from particle_landau import PL; p=PL(N=10**5,dt=1/16,scheme='nanbu',pairing='perm',threads=1); v=p.init(seed=0); print(p.advance(v,16).shape)"  # binary-collision particle solver
 python -m unittest test_validation
 ```
 
