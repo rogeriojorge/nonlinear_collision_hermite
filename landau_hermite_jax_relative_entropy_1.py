@@ -1458,6 +1458,7 @@ def rhs_ab_np(
     use_tt: bool,
     tt_tol: float,
     tt_rmax: int,
+    contraction: str = "canonical",
 ) -> np.ndarray:
     """
     Nonlinear Landau RHS for species a due to b:
@@ -1466,9 +1467,68 @@ def rhs_ab_np(
 
     This is the “full nonlinear operator” building block: self-collisions use
     Q_aa(f, f) and are therefore nonlinear in f.
+    The optional rearranged dense contraction precontracts P/M in one
+    dimension to reduce cancellation; it requires use_tt=False.
     """
+    if contraction == "rearranged":
+        if use_tt:
+            raise ValueError("rearranged contraction requires use_tt=False")
+        return rhs_ab_rearranged_np(fa, fb, T)
+    if contraction != "canonical":
+        raise ValueError(f"unknown contraction={contraction}")
     S1, S2 = build_S_np(fb, T)
     return rhs_ab_with_S_np(fa, S1, S2, T, use_tt=use_tt, tt_tol=tt_tol, tt_rmax=tt_rmax)
+
+
+def rearranged_pair_tables_np(T: ModelTablesNP) -> np.ndarray:
+    """Precontract each one-dimensional projection with its kernel factor.
+
+    W[i,j,t,d,q,n,a,b] = sum_k P_d[n,a,k] M[q,i,j,t,d,k,b].
+    For the first two terms in the derivative direction, the creation shift
+    is included in P_d. The remaining outer derivative shift is applied by
+    the RHS. This is an algebraic rearrangement of the dense operator.
+    """
+    p = T.p
+    W = np.empty((3, 3, 4, 3, T.Q, p, p, p), dtype=np.float64)
+    for i in range(3):
+        for j in range(3):
+            for term in range(4):
+                for dim in range(3):
+                    P = T.P1D[:, :p, :]
+                    if term < 2 and dim == j:
+                        P = T.P1D[:, 1:p+1, :] * np.sqrt(np.arange(1, p+1))[None, :, None]
+                    W[i, j, term, dim] = np.einsum(
+                        "nak,qkb->qnab", P, T.M_buildS[:, i, j, term, dim], optimize=True
+                    )
+    return W
+
+
+def rhs_ab_rearranged_np(fa: np.ndarray, fb: np.ndarray, T: ModelTablesNP,
+                         W: np.ndarray | None = None) -> np.ndarray:
+    """Full dense bilinear RHS with one-dimensional P/M precontraction."""
+    if W is None:
+        W = rearranged_pair_tables_np(T)
+    fa = np.asarray(fa, dtype=np.float64)
+    fb = np.asarray(fb, dtype=np.float64)
+    rhs = np.zeros_like(fa)
+    ladder = np.sqrt(np.arange(1, T.p))
+    for i in range(3):
+        for j in range(3):
+            for term in range(4):
+                x, y, z = W[i, j, term]
+                first = np.einsum("qxad,abc->qbcdx", x, fa, optimize=True)
+                second = np.einsum("qybe,def->qbdfy", y, fb, optimize=True)
+                middle = np.einsum("qbdfy,qbcdx->qcfxy", second, first, optimize=True)
+                value = np.einsum("qcfxy,qzcf,q->xyz", middle, z, T.wq_prefI, optimize=True)
+                source = [slice(None)] * 3
+                target = source.copy()
+                source[i] = slice(None, -1)
+                target[i] = slice(1, None)
+                shape = [1, 1, 1]
+                shape[i] = T.p - 1
+                coefficient = 1.0 if term < 2 else -T.ratio
+                rhs[tuple(target)] += coefficient * ladder.reshape(shape) * value[tuple(source)]
+    return T.pref_cos * rhs
 
 
 # ----------------------------
@@ -1476,12 +1536,51 @@ def rhs_ab_np(
 # ----------------------------
 
 
-def build_jax_functions(T: ModelTablesNP):
+def build_jax_functions(T: ModelTablesNP, *, contraction: str = "canonical"):
     """
-    Return (rhs_ab_jit, rhs_pair_ab_ba_jit, integrate_1sp, integrate_2sp) for JAX backend.
+    Return the JIT-compiled pair RHS for the selected dense contraction.
+
+    The optional rearranged path precontracts P/M in one dimension, retaining
+    the SOE quadrature axis until the three dimensions have been multiplied.
     """
     jax, jnp = _maybe_import_jax("jax")
     assert jax is not None and jnp is not None
+    if contraction == "rearranged":
+        W = jnp.asarray(rearranged_pair_tables_np(T), dtype=jnp.float64)
+        weights = jnp.asarray(T.wq_prefI, dtype=jnp.float64)
+        coefficients = jnp.tile(jnp.array([1., 1., -T.ratio, -T.ratio]), 3)
+        ladder = jnp.sqrt(jnp.arange(1, T.p, dtype=jnp.float64))
+
+        def rhs_rearranged(fa, fb):
+            fa = jnp.asarray(fa, dtype=jnp.float64)
+            fb = jnp.asarray(fb, dtype=jnp.float64)
+            rhs = jnp.zeros_like(fa)
+            for i in range(3):
+                maps = W[i].reshape((12, 3, T.Q, T.p, T.p, T.p))
+
+                def term_step(acc, inputs):
+                    term_maps, coefficient = inputs
+                    x, y, z = term_maps
+                    first = jnp.einsum("qxad,abc->qbcdx", x, fa)
+                    second = jnp.einsum("qybe,def->qbdfy", y, fb)
+                    middle = jnp.einsum("qbdfy,qbcdx->qcfxy", second, first)
+                    value = jnp.einsum("qcfxy,qzcf->qxyz", middle, z)
+                    value = jnp.einsum("q,qxyz->xyz", weights, value)
+                    return acc + coefficient * value, None
+
+                value, _ = jax.lax.scan(term_step, jnp.zeros_like(fa), (maps, coefficients))
+                source = [slice(None)] * 3
+                target = source.copy()
+                source[i] = slice(None, -1)
+                target[i] = slice(1, None)
+                shape = [1, 1, 1]
+                shape[i] = T.p - 1
+                rhs = rhs.at[tuple(target)].add(ladder.reshape(shape) * value[tuple(source)])
+            return T.pref_cos * rhs
+
+        return jax.jit(rhs_rearranged)
+    if contraction != "canonical":
+        raise ValueError(f"unknown contraction={contraction}")
 
     # Transfer tables to device.
     Tj = {
