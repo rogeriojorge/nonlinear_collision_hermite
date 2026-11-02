@@ -173,20 +173,25 @@ def _logfac_np(n: np.ndarray) -> np.ndarray:
 
 
 def leggauss_01_np(Q: int) -> Tuple[np.ndarray, np.ndarray]:
-    """Gauss-Legendre on [0,1], correctly rounded (numpy's nodes and weights are up to 1e-12 off at Q >= 48)."""
+    """
+    Q nodes on (0, 1) for integrands even in s: the positive half of the 2Q-point Gauss-Legendre rule on (-1, 1).
+
+    Every SOE integrand is a polynomial in s^2 (F[q, n] vanishes for odd n), so the rule is exact to degree 4Q - 1.
+    Correctly rounded; numpy's nodes and weights are up to 1e-12 off at large Q.
+    """
     with localcontext() as ctx:
         ctx.prec = 60
         s, w = [], []
-        for x0 in np.polynomial.legendre.leggauss(Q)[0].tolist():
+        for x0 in np.polynomial.legendre.leggauss(2 * Q)[0][Q:].tolist():
             x = Decimal(x0)
-            for _ in range(3):  # Newton on P_Q from a 1e-15 start
+            for _ in range(3):  # Newton on P_2Q from a 1e-15 start
                 p0, p1 = Decimal(1), x
-                for k in range(1, Q):
+                for k in range(1, 2 * Q):
                     p0, p1 = p1, ((2 * k + 1) * x * p1 - k * p0) / (k + 1)
-                dp = Q * (p0 - x * p1) / ((1 - x) * (1 + x))
+                dp = 2 * Q * (p0 - x * p1) / ((1 - x) * (1 + x))
                 x -= p1 / dp
-            s.append(float((x + 1) / 2))
-            w.append(float(1 / ((1 - x) * (1 + x) * dp * dp)))
+            s.append(float(x))
+            w.append(float(2 / ((1 - x) * (1 + x) * dp * dp)))
     return np.array(s, dtype=np.float64), np.array(w, dtype=np.float64)
 
 
