@@ -143,3 +143,27 @@ coefficient-space path. `bench_collision_contraction.py` reproduces the timings 
 even SOE integrands to degree 4Q - 1; it used to be a Q-point rule on (0, 1). At Q = 8 the operator changes by
 up to about 2e-3 relative, and by 1e-10 or less at Q = 24, so figures and numbers made before this change
 with small Q are not reproduced exactly. `--rhs_method` affects the JAX backend only.
+
+## Independent checks
+Solved independently of the Hermite code, with `pip install jax numpy scipy`, one thread:
+
+```bash
+python validation/fourier_landau.py --N 48 --L 8                # nonlinear direct solve of the two-stream test
+python validation/fourier_landau.py --N 48 --L 8 --linearized   # dh/dt = C(h,M) + C(M,h) about the true Maxwellian
+python validation/fourier_landau.py --N 28 --L 8 --correct      # least-squares conservation correction, energy drift 1e-14
+python validation/hermite_laguerre.py                           # Hermite-Laguerre map against 5-D quadrature, and the 91-unknown evolution
+python -c "import sys; sys.path.insert(0,'validation'); from particle_landau import setup_threads; setup_threads(1); from particle_landau import PL; p=PL(N=10**5,dt=1/16,scheme='nanbu',pairing='perm',threads=1); v=p.init(seed=0); print(p.advance(v,16).shape)"  # binary-collision particle solver
+python -m unittest test_validation
+```
+
+`fourier_landau.py` prints t(A/A0=0.3), t(D/D0=0.1), S, dS/dt, the angular defect and the energy drift. At N = 48, L = 8: 7.5956, 6.7507,
+4.58509, 1.70e-3 (nonlinear); 6.4024, 5.5037, dS/dt 1.10e-3 (linearized). The kernel cutoff defaults to R = L; `--R 7.25` sets R = 0.906 L.
+The linearized angular defect at N = 56, t = 20.1 is 6e-10 with `--R 7.25` and 1e-8 with R = L.
+
+Notes:
+- **Timing.** Time the JAX path `build_jax_functions_gauss` (`bench_collision_contraction.py`), not the NumPy path, and time
+  the Fourier solver in JAX too. Fourier is faster at equal L2 on the smooth two-stream test.
+- **D.** D is the Kullback-Leibler divergence of f from the isotropic Maxwellian with the same n, P, W, as the code computes it, not `int f ln(f/f(t=0))`.
+- **Q.** Q = 12 suffices for smooth states and 16 for states with high-mode content.
+- **t(A/A0=0.3).** Linear interpolation between samples every 0.15 gives 7.5956; `--save 0.03` gives 7.5952.
+- **Filter.** `--nu_LB 0` turns the high-Hermite filter off.
