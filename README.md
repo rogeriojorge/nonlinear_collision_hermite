@@ -95,3 +95,26 @@ its contractions are a pointwise product on 2n Gauss-Hermite nodes per direction
 built directly on those nodes. The main script uses it by default; `--rhs_method mpo` selects the
 coefficient-space path. `bench_collision_contraction.py` reproduces the timings and
 `python -m unittest test_gauss_contraction` runs the checks.
+
+## Referee response
+Solved independently of the Hermite code, with `pip install jax numpy scipy`, one thread:
+
+```bash
+python referee/fourier_landau.py --N 48 --L 8                # nonlinear direct solve of the two-stream test
+python referee/fourier_landau.py --N 48 --L 8 --linearized   # dh/dt = C(h,M) + C(M,h) about the true Maxwellian
+python referee/fourier_landau.py --N 28 --L 8 --correct      # least-squares conservation correction, energy drift 1e-14
+python referee/hermite_laguerre.py                           # Hermite-Laguerre map against 5-D quadrature, and the 91-unknown evolution
+python -m unittest test_referee
+```
+
+`fourier_landau.py` prints t(A/A0=0.3), t(D/D0=0.1), S, dS/dt, the angular defect and the energy drift. At N = 48, L = 8: 7.5956, 6.7507,
+4.58509, 1.70e-3 (nonlinear); 6.4024, 5.5037, dS/dt 1.10e-3 (linearized). The kernel cutoff defaults to R = L; `--R 7.25` is the earlier 0.906 L.
+The linearized angular defect at N = 56, t = 20.1 is 6e-10 with `--R 7.25` and 1e-8 with R = L.
+
+Corrections to earlier statements:
+- **Timing.** Earlier timings came from the NumPy path, and the comparison with a Fourier solver mixed libraries. Timing must use the JAX path
+  `build_jax_functions_gauss` (`bench_collision_contraction.py`). Fourier remains faster at equal L2 on the smooth two-stream test.
+- **D.** D is the Kullback-Leibler divergence of f from the isotropic Maxwellian with the same n, P, W, as the code computes it, not `int f ln(f/f(t=0))`.
+- **Q.** Q now counts the nodes of the positive half of a 2Q-point Legendre rule, so it is about half the old Q for the same order: Q = 12 for smooth states, 16 with high-mode content.
+- **t(A/A0=0.3).** Linear interpolation between samples every 0.15 gives 7.5956; `--save 0.03` gives 7.5952.
+- **Filter.** `--nu_LB 0` turns the high-Hermite filter off. The basis-width option behind the widened-basis results is not in this code.
