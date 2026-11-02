@@ -49,6 +49,19 @@ def baseline_build_S(T):
     return jax.jit(build)
 
 
+def baseline_contract(T):
+    """The coefficient-space MPO einsums of `build_jax_functions`, on given S1, S2 (shifts omitted)."""
+    P = jnp.asarray(T.P1D)
+    Pe, Pn = P[:, : T.p_ext], P[:, : T.p]
+    mpo = lambda g, S, Pm: jnp.einsum("abc,xad,ybe,zcf,udef->uxyz", g, Pm, Pm, Pm, S)
+
+    def contract(fa, S1, S2):
+        ge = jnp.zeros((T.p_ext,) * 3).at[: T.p, : T.p, : T.p].set(fa)
+        return [mpo(ge, S1[:, j], Pe) for j in range(3)], mpo(fa, S2.reshape((9, T.p_kp, T.p_kp, T.p_kp)), Pn)
+
+    return jax.jit(contract)
+
+
 def timed(fn, *args):
     t0 = time.perf_counter()
     jax.block_until_ready(fn(*args))
@@ -124,12 +137,13 @@ def main():
             f = jnp.asarray(L.build_ic_fig1_1sp_twostream(n - 1, sp, 1.5).f)
             mpo, mpo_S = L.build_jax_functions(T), baseline_build_S(T)
             gauss, (gauss_S, gauss_C) = L.build_jax_functions_gauss(T), L.build_jax_functions_gauss(T, split_stages=True)
-            S = gauss_S(f)
+            S, mpo_C = gauss_S(f), baseline_contract(T)
+            S1, S2 = mpo_S(f)
             row = dict(n=n, Q=Q, commit=sha, t_tables=t_tables)
             row["compile_mpo"], row["temp_mpo"] = compile_stats(mpo, f, f)
             row["compile_gauss"], row["temp_gauss"] = compile_stats(gauss, f, f)
-            times = {k: [] for k in ("mpo", "mpo_S", "gauss", "gauss_S", "gauss_C")}
-            calls = dict(mpo=(mpo, f, f), mpo_S=(mpo_S, f), gauss=(gauss, f, f), gauss_S=(gauss_S, f), gauss_C=(gauss_C, f, S))
+            times = {k: [] for k in ("mpo", "mpo_S", "mpo_C", "gauss", "gauss_S", "gauss_C")}
+            calls = dict(mpo=(mpo, f, f), mpo_S=(mpo_S, f), mpo_C=(mpo_C, f, S1, S2), gauss=(gauss, f, f), gauss_S=(gauss_S, f), gauss_C=(gauss_C, f, S))
             for fn, *a in calls.values():
                 jax.block_until_ready(fn(*a))
             for _ in range(args.reps):  # A/B alternation

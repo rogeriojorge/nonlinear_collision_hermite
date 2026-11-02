@@ -1,6 +1,14 @@
 # nonlinear_collision_hermite
 Repository for code used in nonlinear collision operator study using Hermite polynomials.
 
+## Gauss-Hermite collision contraction
+`build_jax_functions_gauss(tables)` evaluates the same bilinear `Q_ab(fa, fb)` as `build_jax_functions`
+in O(Q n^4) instead of O(Q n^4 + n^6): `P1D` is a triple product of orthonormal Hermite polynomials, so
+its contractions are a pointwise product on 2n Gauss-Hermite nodes per direction, and the sources are
+built directly on those nodes. The main script uses it by default; `--rhs_method mpo` selects the
+coefficient-space path. `bench_collision_contraction.py` reproduces the timings and
+`python -m unittest test_gauss_contraction` runs the checks.
+
 ## PRL evidence figures
 
 The PRL support scripts are designed to run from the repository root and write
