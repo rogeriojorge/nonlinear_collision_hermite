@@ -130,3 +130,16 @@ The helper runner executes the same sequence:
 Dense `p^9` tensor construction is intentionally restricted to low-order
 validation. It is not part of the production algorithm and should not be enabled
 for large `nmax`.
+
+## Gauss-Hermite collision contraction
+`build_jax_functions_gauss(tables)` evaluates the same bilinear `Q_ab(fa, fb)` as `build_jax_functions`
+in O(Q n^4) instead of O(Q n^4 + n^6): `P1D` is a triple product of orthonormal Hermite polynomials, so
+its contractions are a pointwise product on 2n Gauss-Hermite nodes per direction, and the sources are
+built directly on those nodes. The main script uses it by default; `--rhs_method mpo` selects the
+coefficient-space path. `bench_collision_contraction.py` reproduces the timings and
+`python -m unittest test_gauss_contraction` runs the checks.
+
+`Q` now counts the positive nodes of the 2Q-point Gauss-Legendre rule on (-1, 1), which is exact for the
+even SOE integrands to degree 4Q - 1; it used to be a Q-point rule on (0, 1). At Q = 8 the operator changes by
+up to about 2e-3 relative, and by 1e-10 or less at Q = 24, so figures and numbers made before this change
+with small Q are not reproduced exactly. `--rhs_method` affects the JAX backend only.
