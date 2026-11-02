@@ -12,7 +12,7 @@ Usage:
     from particle_landau import PL
     p = PL(N=10**6, dt=1/16, scheme="ta", pairing="perm", threads=1); v = p.init(seed=0); v = p.advance(v, 16)
 Pairing: "perm" is a full random permutation in each shard (the textbook method, sort based in JAX, N log N);
-"shift" rotates the array and pairs the two halves at a random offset, which is O(N) and cache friendly, checked statistically in campaign results.
+"shift" rotates the array and pairs the two halves at a random offset, which is O(N) and cache friendly but not a published scheme; use "perm" when in doubt.
 With threads > 1 each thread collides within its own shard, then all shards exchange equal pieces, so one step mixes the population globally."""
 import os
 

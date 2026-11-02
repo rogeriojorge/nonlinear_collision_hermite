@@ -1,7 +1,7 @@
 """Independent direct solve of the homogeneous Landau equation (Fourier-spectral, after Pareschi, Russo & Toscani 2000), two-stream test.
 
 C(a, b) = c d_i[(U_ij * b) d_j a - a (d_j U_ij * b)], with U_ij truncated at |u| < R. Shares nothing with the Hermite code.
-Options: the kernel cutoff R (default R = L; R = 0.906 L is the earlier choice), --correct for the least-squares conservation
+Options: the kernel cutoff R (default R = L; R = 0.906 L is also used), --correct for the least-squares conservation
 correction of the collision output (Zhang & Gamba 2017, Eq. 36-37), --linearized for dh/dt = C(h, M) + C(M, h) about the true Maxwellian.
 """
 import argparse

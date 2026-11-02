@@ -1605,6 +1605,14 @@ def build_jax_functions(T: ModelTablesNP):
     return rhs_ab_jit
 
 
+RHS_METHOD = "mpo"  # the main script sets this from --rhs_method
+
+
+def _rhs_builder(T: ModelTablesNP):
+    """JIT pair RHS for the contraction selected by RHS_METHOD."""
+    return build_jax_functions_gauss(T) if RHS_METHOD == "gauss" else build_jax_functions(T)
+
+
 def build_jax_functions_gauss(T: ModelTablesNP, *, split_stages: bool = False):
     """
     Same bilinear Q_ab(fa, fb) as `build_jax_functions`, evaluated on Gauss-Hermite nodes in O(Q n^4).
@@ -3020,9 +3028,9 @@ def run_tests(args) -> None:
         cons_rate_W = float("nan")
 
         if jax is not None and jnp is not None:
-            rhs11_jit = build_jax_functions(T11)
-            rhsab_jit = build_jax_functions(Tab)
-            rhsba_jit = build_jax_functions(Tba)
+            rhs11_jit = _rhs_builder(T11)
+            rhsab_jit = _rhs_builder(Tab)
+            rhsba_jit = _rhs_builder(Tba)
 
             fj = jnp.asarray(f)
             faj = jnp.asarray(fa)
@@ -3116,7 +3124,7 @@ def run_tests(args) -> None:
         # Linearized operator backend check: JAX JVP vs NumPy explicit linearization (small nmax only).
         lin_backend_relerr = float("nan")
         if do_numpy and (jax is not None and jnp is not None):
-            rhs11_jit_tmp = build_jax_functions(T11)
+            rhs11_jit_tmp = _rhs_builder(T11)
             L_jax = make_linearized_rhs_1sp_jax(rhs11_jit_tmp, jnp.asarray(fM1))
             lin_backend_relerr = float(_rel_l2(np.array(L_jax(jnp.asarray(h))), Lh_np))
 
@@ -3141,9 +3149,9 @@ def run_tests(args) -> None:
 
         # JAX short-run integration benchmark (independent of NumPy; provides runtime scaling for nmax>tests_max_numpy_nmax).
         if jax is not None and jnp is not None:
-            rhs11_jit = build_jax_functions(T11)
-            rhsab_jit = build_jax_functions(Tab)
-            rhsba_jit = build_jax_functions(Tba)
+            rhs11_jit = _rhs_builder(T11)
+            rhsab_jit = _rhs_builder(Tab)
+            rhsba_jit = _rhs_builder(Tba)
 
             def rhs_self_j(x):
                 return rhs11_jit(x, x)
@@ -3243,9 +3251,9 @@ def run_tests(args) -> None:
         Tabp = build_model_tables_np(nmax=nmax_phys, Q=Q_phys, maxK=maxK_phys, ma=spa.m, mb=spb.m, vtha=spa.vth, vthb=spb.vth, nu_ab=nu_ab)
         Tbap = build_model_tables_np(nmax=nmax_phys, Q=Q_phys, maxK=maxK_phys, ma=spb.m, mb=spa.m, vtha=spb.vth, vthb=spa.vth, nu_ab=nu_ba)
 
-        rhs11p = build_jax_functions(T11p)
-        rhsabp = build_jax_functions(Tabp)
-        rhsbap = build_jax_functions(Tbap)
+        rhs11p = _rhs_builder(T11p)
+        rhsabp = _rhs_builder(Tabp)
+        rhsbap = _rhs_builder(Tbap)
 
         def rhs_self_j(x):
             return rhs11p(x, x)
@@ -3381,7 +3389,7 @@ def run_tests(args) -> None:
             for nmx in sorted(set(int(x) for x in nmax_list)):
                 fU = build_maxwellian_like_tensor_via_projection(nmax=nmx, sp=sp1, ux_hat=float(u_drift), alpha=1.0, density=1.0, xlim=10.0, nx=2001)
                 TT = build_model_tables_np(nmax=nmx, Q=Q_phys, maxK=maxK_phys, ma=sp1.m, mb=sp1.m, vtha=sp1.vth, vthb=sp1.vth, nu_ab=nu_ab)
-                rhs11_tmp = build_jax_functions(TT)
+                rhs11_tmp = _rhs_builder(TT)
                 rU = float(np.linalg.norm(np.array(rhs11_tmp(jnp.asarray(fU), jnp.asarray(fU))).ravel()) / max(1e-300, np.linalg.norm(fU.ravel())))
                 drift_nmax.append(int(nmx))
                 drift_res.append(float(rU))
@@ -3775,9 +3783,9 @@ def run_tests(args) -> None:
         Tab = build_model_tables_np(nmax=nmax_ref, Q=Q, maxK=maxK, ma=spa.m, mb=spb.m, vtha=spa.vth, vthb=spb.vth, nu_ab=nu_ab)
         Tba = build_model_tables_np(nmax=nmax_ref, Q=Q, maxK=maxK, ma=spb.m, mb=spa.m, vtha=spb.vth, vthb=spa.vth, nu_ab=nu_ba)
 
-        rhs11_jit = build_jax_functions(T11)
-        rhsab_jit = build_jax_functions(Tab)
-        rhsba_jit = build_jax_functions(Tba)
+        rhs11_jit = _rhs_builder(T11)
+        rhsab_jit = _rhs_builder(Tab)
+        rhsba_jit = _rhs_builder(Tba)
 
         fM1 = np.zeros((p, p, p), dtype=np.float64); fM1[0, 0, 0] = 1.0
         faM = np.zeros((p, p, p), dtype=np.float64); faM[0, 0, 0] = 1.0 / (spa.vth**3)
@@ -3932,8 +3940,8 @@ def main() -> None:
     ap.add_argument("--tests_maxK_sweep", type=str, default="128,256,512", help="Comma-separated maxK values for convergence sweeps in --run_tests.")
     ap.add_argument("--tests_max_numpy_nmax", type=int, default=3, help="In --run_tests, only do NumPy-vs-JAX comparisons up to this nmax (NumPy gets slow for larger nmax).")
     args = ap.parse_args()
-    if args.rhs_method == "gauss":
-        globals()["build_jax_functions"] = build_jax_functions_gauss
+    global RHS_METHOD
+    RHS_METHOD = args.rhs_method
 
     args.nu_LB = max(float(args.nu_LB), 1e-300)/(args.nmax-1)/(args.nmax-2)/(args.nmax-3)  # avoid zero collisionality (no LB damping) which can cause issues at low nmax
     backend: BackendName = args.backend  # type: ignore[assignment]
@@ -4009,9 +4017,9 @@ def main() -> None:
     if backend == "jax":
         jax, jnp = _maybe_import_jax("jax")
         assert jax is not None and jnp is not None
-        rhs11_jit = build_jax_functions(T11)
-        rhsab_jit = build_jax_functions(Tab)
-        rhsba_jit = build_jax_functions(Tba)
+        rhs11_jit = _rhs_builder(T11)
+        rhsab_jit = _rhs_builder(Tab)
+        rhsba_jit = _rhs_builder(Tba)
 
     enforce_nonneg_ic = (not bool(getattr(args, "no_enforce_nonneg_ic", False)))
 
