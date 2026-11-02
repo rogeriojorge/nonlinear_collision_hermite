@@ -1642,6 +1642,9 @@ def build_jax_functions_gauss(T: ModelTablesNP, *, split_stages: bool = False):
     for i in range(3):
         for j in range(3):
             for t in range(2):
+                if t == 0 and j < i:  # S1 is symmetric in (i, j)
+                    term[i, j, 0] = term[j, i, 0]
+                    continue
                 A, B = T.M_buildS[:, i, j, 2 * t], T.M_buildS[:, i, j, 2 * t + 1]
                 term[i, j, t] = tuple(kernel_id(A[:, d] + B[:, d] if d == i else A[:, d]) for d in range(3))
     K = [jnp.asarray(x, dtype=jnp.float64) for x in kernels]
